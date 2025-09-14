@@ -3,7 +3,9 @@ import axios from 'axios';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useProjectState } from '../../app/state.jsx';
 import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossref } from '../../lib/refs.js';
-import { mergeReferences, ensureRefIds, formatInText } from '../../lib/refFormat.js';
+import { mergeReferences, ensureRefIds } from '../../lib/refFormat.js';
+import { applyCitations } from '../../lib/citeApply.js';
+import { convertAuthorYearToMarkers } from '../../lib/citeSanitize.js';
 import { applyCitations } from '../../lib/citeApply.js';
 
 function parseCitationTokens(raw) {
@@ -127,8 +129,20 @@ export default function QnA(){
 
       // 3) Prepare a compact refs list for the model (limit to ~8 for focus)
       const allItems = ensureRefIds(refsAfter.items || []);
-      const recentBatch = allItems.slice(-12); // bias towards newly added
-      const aiRefs = recentBatch.slice(0, 8).map(toAIRefStub);
+  const recentBatch = allItems.slice(-16);
+  // Prefer unique first-author/year pairs to avoid repeating same person
+  const uniq = [];
+  const seen = new Set();
+  for (const it of recentBatch) {
+    const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author').toLowerCase();
+    const yr = String(it?.issued?.['date-parts']?.[0]?.[0] || it?.issued?.year || '');
+    const k = fam + '|' + yr;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(it);
+    if (uniq.length >= 8) break;
+  }
+  const aiRefs = uniq.map(toAIRefStub);
 
       // 4) Ask AI to draft with inline markers {{cite:key,...}}
       const { data } = await axios.post('/api/ai/draft', {
