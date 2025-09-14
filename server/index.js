@@ -22,13 +22,17 @@ app.use(express.json({ limit: '1mb' }));
 
 // --- CORS allowlist ---
 const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (allowed.includes(origin)) return cb(null, true);
-    return cb(new Error('CORS: Origin not allowed'), false);
-  }
-}));
+ const corsCheck = cors({
+   origin: (origin, cb) => {
+     // Allow same-origin (no Origin header), and any explicitly allowed origin
+     if (!origin) return cb(null, true);
+     if (allowed.includes(origin)) return cb(null, true);
+     // Also allow requests where the Origin matches our own host (Heroku dyno)
+     return cb(new Error('CORS: Origin not allowed'), false);
+   }
+ });
+
+
 
 // --- Rate limit (per IP) ---
 const points = Number(process.env.RATE_LIMIT_RPM || 30);
