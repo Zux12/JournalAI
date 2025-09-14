@@ -4,16 +4,19 @@ import { useProjectState } from '../../app/state.jsx';
 import { applyCitations } from '../../lib/citeApply.js';
 import { formatBibliographyCitedOnly, formatBibliographyWithMap } from '../../lib/refFormat.js';
 import { collectFigureTableMaps, applyFigTabTokens, buildLists } from '../../lib/figApply.js';
+import { formatCSLBibliography } from '../../lib/csl.js';
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 
 export default function Preview(){
   const { project } = useProjectState();
   const [renumber, setRenumber] = React.useState(true);
+  const [useCSL, setUseCSL] = React.useState(true);   // NEW: exact CSL bibliography
   const [hzBusy, setHzBusy] = React.useState(false);
   const [hzMode, setHzMode] = React.useState('light');
   const order = project.planner.sections || [];
 
+  // Build contiguous numeric numbering map from raw cite markers
   function collectNumberMap() {
     const map = new Map(); let n = 1;
     for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
@@ -27,12 +30,33 @@ export default function Preview(){
     return map;
   }
 
-  // Build pieces with citations + figure/table tokens applied, plus refs and lists
-  function buildPieces(){
+  // Ordered cited keys by first appearance (for author-date CSL)
+  function collectCitedKeysOrder() {
+    const seen = new Set();
+    const orderKeys = [];
+    for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
+      const raw = project.sections[s.id]?.draftRaw || '';
+      const re = /\{\{cite:([^}]+)\}\}/gi; let m;
+      while ((m = re.exec(raw))) {
+        const keys = m[1].split(',').map(k=>k.trim().toLowerCase()).filter(Boolean);
+        for (const k of keys) if (!seen.has(k)) { seen.add(k); orderKeys.push(k); }
+      }
+    }
+    if (!orderKeys.length) {
+      // fallback to union of section.citedKeys
+      Object.values(project.sections || {}).forEach(sec => (sec?.citedKeys || []).forEach(k => {
+        if (!seen.has(k)) { seen.add(k); orderKeys.push(String(k).toLowerCase()); }
+      }));
+    }
+    return orderKeys;
+  }
+
+  // Build sections text (+fig/tab tokens) and references block(s)
+  async function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
     const numMap  = (renumber && numeric) ? collectNumberMap() : null;
 
-    // Build figure/table number maps from first appearance across raw drafts
+    // Figure/Table numbering
     const { figMap, tabMap } = collectFigureTableMaps(project.sections, project.figures, project.tables);
 
     const pieces = [];
@@ -43,59 +67,104 @@ export default function Preview(){
       } else {
         txt = project.sections[s.id]?.draft || '';
       }
-      // Apply {fig:id}/{tab:id} tokens
       txt = applyFigTabTokens(txt, figMap, tabMap);
       pieces.push({ title: s.name, text: txt });
     }
 
-    // Bibliography
-    let refsText = '';
+    // Simple formatter (existing)
+    let refsSimple = '';
     if (numeric && numMap && numMap.size > 0) {
-      refsText = formatBibliographyWithMap(project.styleId, project.references || {}, numMap);
+      refsSimple = formatBibliographyWithMap(project.styleId, project.references || {}, numMap);
     } else {
       const citedSet = new Set();
       Object.values(project.sections || {}).forEach(sec => (sec?.citedKeys || []).forEach(k => citedSet.add(String(k).toLowerCase())));
       const citedKeys = Array.from(citedSet);
-      refsText = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
+      refsSimple = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
+    }
+
+    // Exact CSL bibliography (optional)
+    let refsCSL = '';
+    try {
+      if (useCSL) {
+        const all = (project.references?.items || []);
+        if (numeric && numMap && numMap.size > 0) {
+          // numeric: order items by contiguous number map
+          const byKey = new Map(all.map(it => {
+            const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
+            return [key, it];
+          }));
+          const ordered = Array.from(numMap.entries())
+            .sort((a,b)=>a[1]-b[1])
+            .map(([k]) => byKey.get(k))
+            .filter(Boolean);
+          if (ordered.length) {
+            const biblio = await formatCSLBibliography(project.styleId, ordered);
+            // prefix with [n]
+            refsCSL = biblio
+              .split(/\r?\n/)
+              .map((line, i) => `[${i+1}] ${line}`)
+              .join('\n');
+          }
+        } else {
+          // author-date: cited-only in first-appearance order
+          const orderKeys = collectCitedKeysOrder();
+          const byKey = new Map(all.map(it => {
+            const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
+            return [key, it];
+          }));
+          const ordered = orderKeys.map(k => byKey.get(k)).filter(Boolean);
+          if (ordered.length) {
+            refsCSL = await formatCSLBibliography(project.styleId, ordered);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('CSL bibliography failed:', e?.message || e);
     }
 
     // Lists of Figures/Tables
     const { listOfFigures, listOfTables } = buildLists(figMap, tabMap, project.figures, project.tables);
 
-    return { pieces, refsText, listOfFigures, listOfTables };
+    return { pieces, refsSimple, refsCSL, listOfFigures, listOfTables };
   }
 
-  function buildManuscriptText(){
-    const { pieces, refsText, listOfFigures, listOfTables } = buildPieces();
+  async function buildManuscriptText(){
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
     const body = pieces.map(p => `# ${p.title}\n\n${p.text}`).join('\n\n');
 
     const lof = listOfFigures?.trim() ? `\n\n# List of Figures\n\n${listOfFigures}` : '';
     const lot = listOfTables?.trim()  ? `\n\n# List of Tables\n\n${listOfTables}`   : '';
-    const refs = refsText?.trim()     ? `\n\n# References\n\n${refsText}`          : '';
+
+    const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
+    const refs = refsText?.trim() ? `\n\n# References\n\n${refsText}` : '';
 
     return body + lof + lot + refs;
   }
 
   function exportAll(){
-    const text = buildManuscriptText();
-    const blob = new Blob([text], {type:'text/plain'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download='manuscript.txt'; a.click();
-    URL.revokeObjectURL(url);
+    (async () => {
+      const text = await buildManuscriptText();
+      const blob = new Blob([text], {type:'text/plain'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='manuscript.txt'; a.click();
+      URL.revokeObjectURL(url);
+    })();
   }
 
   // Chunked humanize per section (avoids router timeout)
   async function humanizeAndDownload(){
     setHzBusy(true);
     try{
-      const { pieces, refsText, listOfFigures, listOfTables } = buildPieces();
-
+      const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
       const out = [];
+
       for (const p of pieces) {
         const chunk = `# ${p.title}\n\n${p.text}`;
         const { data } = await axios.post('/api/ai/humanize', { text: chunk, degree: hzMode });
         out.push((data && typeof data.text === 'string') ? data.text : chunk);
       }
+
+      const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
       if (listOfFigures?.trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
       if (listOfTables?.trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
       if (refsText?.trim())      out.push(`\n# References\n\n${refsText}`);
@@ -114,7 +183,16 @@ export default function Preview(){
     }
   }
 
-  const manuscript = buildManuscriptText();
+  const [preview, setPreview] = React.useState(''); // async preview text
+  React.useEffect(() => {
+    let ok = true;
+    (async () => {
+      const text = await buildManuscriptText();
+      if (ok) setPreview(text);
+    })();
+    return ()=>{ ok = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.updatedAt, renumber, useCSL]);
 
   return (
     <div className="card">
@@ -129,8 +207,15 @@ export default function Preview(){
         </div>
       )}
 
+      <div style={{margin:'8px 0'}}>
+        <label>
+          <input type="checkbox" checked={useCSL} onChange={e=>setUseCSL(e.target.checked)} />
+          {' '}Use exact CSL bibliography (publisher-accurate punctuation)
+        </label>
+      </div>
+
       <div style={{whiteSpace:'pre-wrap', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, maxHeight:'60vh', overflow:'auto'}}>
-        {manuscript}
+        {preview}
       </div>
 
       <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
@@ -148,7 +233,7 @@ export default function Preview(){
       </div>
 
       <div style={{fontSize:12, color:'#667', marginTop:6}}>
-        Tip: Use {`{fig:YOUR_ID}`} or {`{tab:YOUR_ID}`} inside drafts to reference items. IDs come from the Figures & Tables page.
+        Tip: Put CSL files in <code>/public/csl/</code>. If a style is missing, the app falls back to the simple formatter.
       </div>
     </div>
   );
