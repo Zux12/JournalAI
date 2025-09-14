@@ -9,9 +9,8 @@ export default function Preview(){
     return project.sections[s.id]?.draft || (s.id==='refs' ? renderRefs() : '');
   }
   function renderRefs(){
-    // Minimal plain-text list; styling by styleId can be added later with CSL rendering
-    const items = project.references?.items || [];
-    return items.map((it,i)=> `[${i+1}] ${it.author?.map(a=>`${a.family} ${a.given?.[0]||''}.`).join(' ')} ${it.title}. ${it['container-title']} (${it.issued?.['date-parts']?.[0]?.[0]||''}).`).join('\n');
+    const { formatBibliography } = require('../../lib/refFormat.js');
+    return formatBibliography(project.styleId, project.references || {});
   }
   function exportAll(){
     const text = order.filter(s=>!s.skipped).map(s=>`# ${s.name}\n\n${sectionText(s)}`).join('\n\n');
