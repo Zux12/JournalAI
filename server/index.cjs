@@ -89,33 +89,69 @@ api.post('/ai/keywords', async (req, res) => {
 
 api.post('/ai/draft', async (req, res) => {
   try {
-    const { sectionName='Section', tone='neutral', styleId='ieee', context={} } = req.body || {};
+    const {
+      sectionName = 'Section',
+      tone = 'neutral',
+      styleId = 'ieee',
+      context = {}
+    } = req.body || {};
+
     const refsForAI = Array.isArray(context.refs) ? context.refs : [];
-    const density = context.citationDensity === 'dense' ? 'dense' : 'normal';
+    const density = String(context.citationDensity || 'normal').toLowerCase(); // normal|dense|extra|extreme
+    const lengthPreset = String(context.lengthPreset || 'extended').toLowerCase(); // brief|standard|extended|comprehensive
+    const paragraphs = Math.max(1, Math.min(12, Number(context.paragraphs || 4)));
+
+    const lenMap = {
+      brief:        [150, 250],
+      standard:     [300, 500],
+      extended:     [700, 900],
+      comprehensive:[1200, 1500]
+    };
+    const [minW, maxW] = lenMap[lengthPreset] || lenMap.extended;
+
+    const densityRules = {
+      normal:   'Cite at least once per paragraph; no more than 2 citations per sentence.',
+      dense:    'Cite 1–2 sources in most substantive sentences; vary keys across the paragraph.',
+      extra:    'Cite ~2–3 sources in most substantive sentences; do not reuse the same key more than twice.',
+      extreme:  'Cite ~3–4 sources in nearly every sentence where appropriate; strictly avoid reusing the same key more than twice.'
+    };
+    const densityText = densityRules[density] || densityRules.normal;
 
     const systemMsg =
-      'You are an expert academic writer. STRICT RULES: ' +
-      '1) NEVER invent works. 2) NEVER write (Author, Year) or [1] yourself. ' +
-      '3) When a sentence uses a source, append ONLY a marker like {{cite:key1,key2}} immediately after that sentence. ' +
-      '4) Use ONLY the keys provided in the refs list. ' +
-      '5) If unsure, omit the marker.';
+      'You are an expert academic writer. STRICT RULES:\n' +
+      '1) NEVER invent works. Only use refs by their provided keys.\n' +
+      '2) NEVER write author-year or numeric brackets yourself.\n' +
+      '3) When a sentence uses a source, append ONLY a marker like {{cite:key1,key2}} immediately after that sentence.\n' +
+      '4) Use multiple distinct keys across the section; do NOT overuse one key.\n' +
+      '5) If unsure, omit the marker.\n';
 
     const userMsg =
 `Write the "${sectionName}" in a ${tone} academic tone.
-Style family: ${styleId} (FYI; the app formats later).
-Citation density: ${density} (dense = cite most substantive sentences; normal = 1–2 per paragraph).
-Context:
+
+Target length: ~${minW}–${maxW} words across ${paragraphs} paragraphs (±10% is fine).
+Citation density: ${density} — ${densityText}
+Style family: ${styleId} (FYI; the app will format citations later).
+
+Context JSON:
 ${JSON.stringify({
   title: context.title,
   discipline: context.discipline,
   keywords: context.keywords,
   notes: context.sectionNotes,
-  refs: refsForAI // [{key, author, year, title}]
+  refs: refsForAI  // array of {key, author, year, title}
 }, null, 2)}
-Remember: Insert {{cite:key}} markers right where sources are used. Do not write author-year or numeric brackets yourself.`;
+
+Guidelines:
+- Structure into ${paragraphs} coherent paragraphs; keep topic sentences clear.
+- Use the provided refs by their keys with {{cite:key}} markers exactly where evidence is used.
+- Do NOT output a references list; only prose with markers.
+`;
 
     const content = await openaiChat(
-      [{ role:'system', content: systemMsg }, { role:'user', content: userMsg }],
+      [
+        { role: 'system', content: systemMsg },
+        { role: 'user',    content: userMsg }
+      ],
       'gpt-4o-mini',
       0.5
     );
@@ -126,6 +162,7 @@ Remember: Insert {{cite:key}} markers right where sources are used. Do not write
     res.status(500).json({ error: 'AI draft failed' });
   }
 });
+
 
 
 
