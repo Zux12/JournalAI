@@ -6,6 +6,7 @@ import Landing from './features/landing/Landing.jsx';
 import Metadata from './features/metadata/Metadata.jsx';
 import Planner from './features/planner/Planner.jsx';
 import QnA from './features/qa/QnA.jsx';
+import Sources from './features/sources/Sources.jsx';
 import Figures from './features/figures/Figures.jsx';
 import References from './features/references/References.jsx';
 import Declarations from './features/declarations/Declarations.jsx';
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { path: 'metadata', element: <Metadata /> },
       { path: 'planner', element: <Planner /> },
       { path: 'qa/:sectionId?', element: <QnA /> },
+      { path: 'sources', element: <Sources /> },
       { path: 'figures', element: <Figures /> },
       { path: 'references', element: <References /> },
       { path: 'declarations', element: <Declarations /> },
