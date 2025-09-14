@@ -42,8 +42,14 @@ const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()
    catch { res.status(429).json({ error: 'Rate limit exceeded. Try again in a minute.' }); }
  };
 
-// --- Health ---
-app.get('/api/health', (req, res) => res.json({ ok: true }));
++ // --- API router ---
++ const api = express.Router();
++ api.use(corsCheck, rateLimitMiddleware);
++ api.get('/health', (req, res) => res.json({ ok: true }));
++ api.post('/ai/keywords', async (req, res) => { /* …existing handler… */ });
++ api.post('/ai/draft', async (req, res) => { /* …existing handler… */ });
++ api.post('/ai/humanize', async (req, res) => { /* …existing handler… */ });
++ app.use('/api', api);
 
 // --- AI proxy routes (stubs that call OpenAI) ---
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
