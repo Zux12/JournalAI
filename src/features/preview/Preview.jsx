@@ -7,24 +7,23 @@ import { collectFigureTableMaps, applyFigTabTokens, buildLists } from '../../lib
 import { formatCSLBibliography } from '../../lib/csl.js';
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
-const [docxBusy, setDocxBusy] = React.useState(false);
 
 export default function Preview(){
   const { project } = useProjectState();
   const [renumber, setRenumber] = React.useState(true);
   const [useCSL, setUseCSL] = React.useState(true);
   const [hzBusy, setHzBusy] = React.useState(false);
-  const [hzMode, setHzMode] = React.useState('light');
+  const [hzMode, setHzMode] = React.useState('light'); // light|medium
   const order = project.planner.sections || [];
 
-  // ------- Front matter helpers -------
+  // ---------- Front matter ----------
   function buildFrontMatter(){
     const md = project.metadata || {};
     const title = md.title || 'Untitled Manuscript';
 
-    // Collect affiliations and map to [1], [2], ...
+    // affiliations map
     const affils = [];
-    const affIndex = new Map(); // aff -> number
+    const affIndex = new Map();
     (md.authors || []).forEach(a => {
       const aff = (a.affiliation || '').trim();
       if (aff && !affIndex.has(aff)) {
@@ -33,39 +32,30 @@ export default function Preview(){
       }
     });
 
-    // Authors line: Name [n][m]*  (asterisk for corresponding)
     const authorsLine = (md.authors || []).length
       ? 'Authors: ' + md.authors.map(a => {
-          const nums = [];
           const aff = (a.affiliation || '').trim();
-          if (aff && affIndex.has(aff)) nums.push(affIndex.get(aff));
+          const nums = (aff && affIndex.has(aff)) ? [affIndex.get(aff)] : [];
           const tag = nums.length ? ` [${nums.join(',')}]` : '';
           const star = a.isCorresponding ? '*' : '';
           return `${a.name || 'Author'}${tag}${star}`;
         }).join(', ')
       : '';
 
-    const affilBlock = affils.length
-      ? affils.map((aff,i)=>`[${i+1}] ${aff}`).join('\n')
-      : '';
+    const affilBlock = affils.length ? affils.map((aff,i)=>`[${i+1}] ${aff}`).join('\n') : '';
 
-    // Corresponding author line
     const corr = (md.authors || []).find(a => a.isCorresponding) || (md.authors || [])[0];
-    const corrLine = corr && corr.email
-      ? `Correspondence: ${corr.name || 'Corresponding Author'} <${corr.email}>`
-      : '';
+    const corrLine = corr && corr.email ? `Correspondence: ${corr.name || 'Corresponding Author'} <${corr.email}>` : '';
 
-    // Title as H1 so DOCX exporter renders heading
-    const parts = [
+    return [
       `# ${title}`,
       authorsLine,
       affilBlock,
       corrLine
-    ].filter(Boolean);
-
-    return parts.join('\n') + '\n';
+    ].filter(Boolean).join('\n') + '\n';
   }
 
+  // ---------- Citations numbering ----------
   function collectNumberMap() {
     const map = new Map(); let n = 1;
     for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
@@ -98,61 +88,7 @@ export default function Preview(){
     return orderKeys;
   }
 
-  async function exportDocx(humanize = false){
-  setDocxBusy(true);
-  try{
-    if (!humanize) {
-      // non-humanized DOCX (uses your renumber/CSL/lists/front matter)
-      const text = await buildManuscriptText();
-      const { data } = await axios.post(
-        '/api/export/docx',
-        { content: text, filename: 'manuscript.docx' },
-        { responseType: 'arraybuffer' }
-      );
-      const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'manuscript.docx';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      return;
-    }
-
-    // humanized → DOCX (chunk each section to avoid timeouts)
-    const fm = buildFrontMatter();
-    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
-    const out = [fm];
-
-    for (const p of pieces) {
-      const chunk = `# ${p.title}\n\n${p.text}`;
-      const { data } = await axios.post('/api/ai/humanize', { text: chunk, degree: hzMode });
-      out.push((data && typeof data.text === 'string') ? data.text : chunk);
-    }
-
-    const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
-    if (listOfFigures?.trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
-    if (listOfTables?.trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
-    if (refsText?.trim())      out.push(`\n# References\n\n${refsText}`);
-
-    const finalText = out.join('\n\n');
-    const { data } = await axios.post(
-      '/api/export/docx',
-      { content: finalText, filename: `manuscript_humanized_${hzMode}.docx` },
-      { responseType: 'arraybuffer' }
-    );
-    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${hzMode}.docx`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  } catch (err) {
-    console.error('DOCX export failed:', err);
-    alert(`DOCX export failed: ${err?.response?.data?.error || err.message}`);
-  } finally {
-    setDocxBusy(false);
-  }
-}
-
-  
+  // ---------- Build sections + refs ----------
   async function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
     const numMap  = (renumber && numeric) ? collectNumberMap() : null;
@@ -167,50 +103,39 @@ export default function Preview(){
       } else {
         txt = project.sections[s.id]?.draft || '';
       }
-      // Add Keywords after Abstract
+      // append keywords under Abstract
       if (/^abstract$/i.test(s.name) && (project.metadata?.keywords || []).length) {
-        const keyline = `\n\nKeywords: ${(project.metadata.keywords || []).join('; ')}`;
-        txt = (txt || '') + keyline;
+        txt = (txt || '') + `\n\nKeywords: ${(project.metadata.keywords || []).join('; ')}`;
       }
       txt = applyFigTabTokens(txt, figMap, tabMap);
       pieces.push({ title: s.name, text: txt });
     }
 
-    // Simple formatter as fallback
+    // simple formatter fallback
     let refsSimple = '';
     if (numeric && numMap && numMap.size > 0) {
       refsSimple = formatBibliographyWithMap(project.styleId, project.references || {}, numMap);
     } else {
       const citedSet = new Set();
       Object.values(project.sections || {}).forEach(sec => (sec?.citedKeys || []).forEach(k => citedSet.add(String(k).toLowerCase())));
-      const citedKeys = Array.from(citedSet);
-      refsSimple = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
+      refsSimple = formatBibliographyCitedOnly(project.styleId, project.references || {}, Array.from(citedSet));
     }
 
-    // CSL exact bibliography (optional)
+    // exact CSL bibliography (optional)
     let refsCSL = '';
     try {
       if (useCSL) {
         const all = (project.references?.items || []);
         if (numeric && numMap && numMap.size > 0) {
-          const byKey = new Map(all.map(it => {
-            const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
-            return [key, it];
-          }));
-          const ordered = Array.from(numMap.entries())
-            .sort((a,b)=>a[1]-b[1])
-            .map(([k]) => byKey.get(k))
-            .filter(Boolean);
+          const byKey = new Map(all.map(it => [(it._key || it.id || it.DOI || it.title || '').toLowerCase(), it]));
+          const ordered = Array.from(numMap.entries()).sort((a,b)=>a[1]-b[1]).map(([k]) => byKey.get(k)).filter(Boolean);
           if (ordered.length) {
             const biblio = await formatCSLBibliography(project.styleId, ordered);
             refsCSL = biblio.split(/\r?\n/).map((line, i) => `[${i+1}] ${line}`).join('\n');
           }
         } else {
           const orderKeys = collectCitedKeysOrder();
-          const byKey = new Map(all.map(it => {
-            const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
-            return [key, it];
-          }));
+          const byKey = new Map(all.map(it => [(it._key || it.id || it.DOI || it.title || '').toLowerCase(), it]));
           const ordered = orderKeys.map(k => byKey.get(k)).filter(Boolean);
           if (ordered.length) refsCSL = await formatCSLBibliography(project.styleId, ordered);
         }
@@ -220,7 +145,6 @@ export default function Preview(){
     }
 
     const { listOfFigures, listOfTables } = buildLists(figMap, tabMap, project.figures, project.tables);
-
     return { pieces, refsSimple, refsCSL, listOfFigures, listOfTables };
   }
 
@@ -238,6 +162,7 @@ export default function Preview(){
     return fm + '\n' + body + lof + lot + refs;
   }
 
+  // TXT export
   function exportAll(){
     (async () => {
       const text = await buildManuscriptText();
@@ -248,28 +173,7 @@ export default function Preview(){
     })();
   }
 
-  async function exportDocx(){
-  try{
-    const text = await buildManuscriptText(); // already includes renumber/CSL/lists
-    const { data } = await axios.post(
-      '/api/export/docx',
-      { content: text, filename: 'manuscript.docx' },
-      { responseType: 'arraybuffer' }
-    );
-    const blob = new Blob([data], {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'manuscript.docx';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  } catch (err) {
-    console.error('DOCX export failed:', err);
-    alert(`DOCX export failed: ${err?.response?.data?.error || err.message}`);
-  }
-}
-
+  // TXT humanize (chunked)
   async function humanizeAndDownload(){
     setHzBusy(true);
     try{
@@ -291,7 +195,7 @@ export default function Preview(){
       const finalText = out.join('\n\n');
       const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href=url; a.download=`manuscript_humanized_${hzMode}.txt`;
+      const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${hzMode}.txt`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
     } catch (err) {
@@ -302,6 +206,27 @@ export default function Preview(){
     }
   }
 
+  // DOCX (non-humanized)
+  async function exportDocx(){
+    try{
+      const text = await buildManuscriptText();
+      const { data } = await axios.post(
+        '/api/export/docx',
+        { content: text, filename: 'manuscript.docx' },
+        { responseType: 'arraybuffer' }
+      );
+      const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'manuscript.docx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('DOCX export failed:', err);
+      alert(`DOCX export failed: ${err?.response?.data?.error || err.message}`);
+    }
+  }
+
+  // async preview text
   const [preview, setPreview] = React.useState('');
   React.useEffect(() => {
     let ok = true;
@@ -337,28 +262,23 @@ export default function Preview(){
         {preview}
       </div>
 
-     <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
-  <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
-  <label style={{marginLeft:8}}>
-    Humanize:
-    <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
-      <option value="light">Light</option>
-      <option value="medium">Medium</option>
-    </select>
-  </label>
-  <button onClick={humanizeAndDownload} disabled={hzBusy}>
-    {hzBusy ? 'Humanizing…' : 'Humanize & Download'}
-  </button>
-  <button onClick={()=>exportDocx(false)} disabled={docxBusy}>Download DOCX</button>
-<button onClick={()=>exportDocx(true)}  disabled={docxBusy}>
-  {docxBusy ? 'Building DOCX…' : 'Humanize & Download DOCX'}
-</button>
-
-</div>
-
+      <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
+        <label style={{marginLeft:8}}>
+          Humanize:
+          <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
+            <option value="light">Light</option>
+            <option value="medium">Medium</option>
+          </select>
+        </label>
+        <button onClick={humanizeAndDownload} disabled={hzBusy}>
+          {hzBusy ? 'Humanizing…' : 'Humanize & Download (TXT)'}
+        </button>
+        <button onClick={exportDocx}>Download DOCX</button>
+      </div>
 
       <div style={{fontSize:12, color:'#667', marginTop:6}}>
-        Tip: Fill Authors/Affiliations/Emails in <em>Metadata</em>. Keywords appear under Abstract automatically.
+        Tip: DOCX is the non-humanized version. Use “Humanize & Download (TXT)” if you want a lighter rewrite.
       </div>
     </div>
   );
