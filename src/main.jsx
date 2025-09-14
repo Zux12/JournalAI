@@ -9,6 +9,7 @@ import QnA from './features/qa/QnA.jsx';
 import Figures from './features/figures/Figures.jsx';
 import References from './features/references/References.jsx';
 import Declarations from './features/declarations/Declarations.jsx';
+import { ProjectProvider } from './app/state.jsx';
 import Preview from './features/preview/Preview.jsx';
 
 const router = createBrowserRouter([
@@ -30,6 +31,8 @@ const router = createBrowserRouter([
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+        <ProjectProvider>
+      <RouterProvider router={router} />
+    </ProjectProvider>
   </React.StrictMode>
 );
