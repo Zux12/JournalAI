@@ -1,6 +1,6 @@
 import React from 'react';
 import axios from 'axios';
-import { useProjectState } from '../../app/state.js';
+import { useProjectState } from '../../app/state.jsx';
 
 export default function Metadata(){
   const { project, setMetadata } = useProjectState();
