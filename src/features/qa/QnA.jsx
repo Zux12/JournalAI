@@ -77,6 +77,10 @@ export default function QnA(){
   const [lengthPreset, setLen]  = React.useState('extended');      // brief|standard|extended|comprehensive
   const [paragraphs, setParas]  = React.useState(4);
   const draft = project.sections[id]?.draft || '';
+  const wordCount = (draft || '').trim() ? (draft.trim().split(/\s+/).length) : 0;
+  // Rough count: numeric or author-date citations
+  const citeCount = ((draft || '').match(/\[[0-9].*?\]|\(.*?\d{4}.*?\)/g) || []).length;
+
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
@@ -307,6 +311,10 @@ export default function QnA(){
       <div className="card">
         <h3>Live Draft</h3>
         <textarea ref={draftRef} className="input" rows="18" value={draft} onChange={e=>setSectionDraft(id, e.target.value)} />
+        <div style={{marginTop:6, fontSize:12, color:'#667'}}>
+  Words: {wordCount} • Inline citations: {citeCount} {density ? `• Density: ${density}` : ''}
+</div>
+
         <div style={{marginTop:8}}>
           {(project.sections[id]?.citedKeys || []).length>0 && <div style={{fontSize:12, color:'#667', marginBottom:6}}>References used in this section:</div>}
           <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
