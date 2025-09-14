@@ -34,17 +34,13 @@ const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()
 
 
 
-// --- Rate limit (per IP) ---
-const points = Number(process.env.RATE_LIMIT_RPM || 30);
-const rateLimiter = new RateLimiterMemory({ points, duration: 60 });
-app.use(async (req, res, next) => {
-  try {
-    await rateLimiter.consume(req.ip);
-    next();
-  } catch {
-    res.status(429).json({ error: 'Rate limit exceeded. Try again in a minute.' });
-  }
-});
+ // --- Rate limit (per IP) only for /api ---
+ const points = Number(process.env.RATE_LIMIT_RPM || 30);
+ const rateLimiter = new RateLimiterMemory({ points, duration: 60 });
+ const rateLimitMiddleware = async (req, res, next) => {
+   try { await rateLimiter.consume(req.ip); next(); }
+   catch { res.status(429).json({ error: 'Rate limit exceeded. Try again in a minute.' }); }
+ };
 
 // --- Health ---
 app.get('/api/health', (req, res) => res.json({ ok: true }));
