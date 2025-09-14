@@ -1,6 +1,6 @@
 import React from 'react';
 import axios from 'axios';
-import { useProjectState } from '../../app/state.js';
+import { useProjectState } from '../../app/state.jsx';
 import { useParams } from 'react-router-dom';
 
 export default function QnA(){
