@@ -66,17 +66,22 @@ export function formatInText(styleId, refs, keys=[]) {
   }
 
   // Author-date variants
+
   if (AUTHORDATE_STYLES.has(styleId)) {
     const look = new Map(items.map(it => [it._key, it]));
     const parts = [];
     for (const k of keys) {
       const it = look.get((k.toLowerCase?.() || String(k).toLowerCase()));
       if (!it) continue;
-      parts.push(`${firstAuthorFamily(it)}, ${pubYear(it)}`);
+      const n = (it.author || []).length;
+      const fam = firstAuthorFamily(it);
+      const yr = pubYear(it);
+      const label = n > 1 ? `${fam} et al., ${yr}` : `${fam}, ${yr}`;
+      parts.push(label);
     }
-    if (!parts.length) return '';
-    return `(${parts.join('; ')})`;
+    return parts.length ? `(${parts.join('; ')})` : '';
   }
+
 
   // Fallback to numeric
   return formatInText('ieee', refs, keys);
