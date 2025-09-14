@@ -1,10 +1,8 @@
 import React from 'react';
+import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
 import { applyCitations } from '../../lib/citeApply.js';
 import { formatBibliographyCitedOnly, formatBibliographyWithMap } from '../../lib/refFormat.js';
-import axios from 'axios';
-
-
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 
@@ -12,8 +10,7 @@ export default function Preview(){
   const { project } = useProjectState();
   const [renumber, setRenumber] = React.useState(true); // default ON
   const [hzBusy, setHzBusy] = React.useState(false);
-const [hzMode, setHzMode] = React.useState('light'); // light|medium
-
+  const [hzMode, setHzMode] = React.useState('light'); // light|medium
   const order = project.planner.sections || [];
 
   function collectNumberMap() {
@@ -26,98 +23,138 @@ const [hzMode, setHzMode] = React.useState('light'); // light|medium
       let m;
       while ((m = re.exec(raw))) {
         const keys = m[1].split(',').map(k=>k.trim().toLowerCase()).filter(Boolean);
-        for (const k of keys) {
-          if (!map.has(k)) map.set(k, n++);
-        }
+        for (const k of keys) if (!map.has(k)) map.set(k, n++);
       }
     }
     return map;
   }
 
-  function buildBodyAndRefs(){
+  // Build per-section pieces (already formatted inline citations) and refs block
+  function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
     const numMap = (renumber && numeric) ? collectNumberMap() : null;
 
-    // 1) Body
-    const parts = [];
+    // Sections
+    const pieces = [];
     for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
       let txt = '';
       if (numMap && project.sections[s.id]?.draftRaw) {
         // Re-apply with contiguous numbering
-        txt = applyCitations(project.sections[s.id].draftRaw, project.styleId, project.references || {}, numMap).text;
+        txt = applyCitations(
+          project.sections[s.id].draftRaw,
+          project.styleId,
+          project.references || {},
+          numMap
+        ).text;
       } else {
         // Use already formatted draft
         txt = project.sections[s.id]?.draft || '';
       }
-      parts.push(`# ${s.name}\n\n${txt}`);
+      pieces.push({ title: s.name, text: txt });
     }
-    const body = parts.join('\n\n');
 
-    // 2) References block
+    // Bibliography
     let refsText = '';
     if (numeric && numMap && numMap.size > 0) {
       refsText = formatBibliographyWithMap(project.styleId, project.references || {}, numMap);
     } else {
-      // cited-only fallback (author-date, or numeric without renumber)
       const citedSet = new Set();
       Object.values(project.sections || {}).forEach(sec => (sec?.citedKeys || []).forEach(k => citedSet.add(String(k).toLowerCase())));
       const citedKeys = Array.from(citedSet);
-      const block = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
-      refsText = block;
+      refsText = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
     }
 
-    const withRefs = refsText?.trim() ? `${body}\n\n# References\n\n${refsText}` : body;
-    return withRefs;
+    return { pieces, refsText };
+  }
+
+  function buildManuscriptText(){
+    const { pieces, refsText } = buildPieces();
+    const body = pieces.map(p => `# ${p.title}\n\n${p.text}`).join('\n\n');
+    return refsText?.trim() ? `${body}\n\n# References\n\n${refsText}` : body;
   }
 
   function exportAll(){
-    const text = buildBodyAndRefs();
+    const text = buildManuscriptText();
     const blob = new Blob([text], {type:'text/plain'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href=url; a.download='manuscript.txt'; a.click();
     URL.revokeObjectURL(url);
   }
 
+  // Chunked humanize to avoid Heroku router timeouts
   async function humanizeAndDownload(){
-  try{
     setHzBusy(true);
-    const text = buildBodyAndRefs();
-    const { data } = await axios.post('/api/ai/humanize', { text, degree: hzMode });
-    const blob = new Blob([data.text || text], {type:'text/plain'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=`manuscript_humanized_${hzMode}.txt`; a.click();
-    URL.revokeObjectURL(url);
-  } finally { setHzBusy(false); }
-}
+    try{
+      const { pieces, refsText } = buildPieces();
 
-  
-  const manuscript = buildBodyAndRefs();
+      const out = [];
+      // Humanize each section sequentially (fast, avoids 30s timeout)
+      for (const p of pieces) {
+        const chunk = `# ${p.title}\n\n${p.text}`;
+        const { data } = await axios.post('/api/ai/humanize', { text: chunk, degree: hzMode });
+        out.push((data && typeof data.text === 'string') ? data.text : chunk);
+      }
+      if (refsText?.trim()) out.push(`\n# References\n\n${refsText}`);
+
+      const finalText = out.join('\n\n');
+      const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `manuscript_humanized_${hzMode}.txt`;
+      // Safari/iOS prefers element in DOM
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('Humanize failed:', err);
+      alert(`Humanize failed: ${err?.response?.data?.error || err.message}`);
+    } finally {
+      setHzBusy(false);
+    }
+  }
+
+  const manuscript = buildManuscriptText();
 
   return (
     <div className="card">
       <h2>Preview & Export (clean text)</h2>
+
       {NUMERIC.has(project.styleId) && (
         <div style={{margin:'8px 0'}}>
-          <label><input type="checkbox" checked={renumber} onChange={e=>setRenumber(e.target.checked)} /> Renumber numeric citations contiguously at export</label>
+          <label>
+            <input
+              type="checkbox"
+              checked={renumber}
+              onChange={e=>setRenumber(e.target.checked)}
+            />{' '}
+            Renumber numeric citations contiguously at export
+          </label>
         </div>
       )}
+
       <div style={{whiteSpace:'pre-wrap', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, maxHeight:'60vh', overflow:'auto'}}>
         {manuscript}
       </div>
 
-<div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
-  <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
-  <label style={{marginLeft:8}}>
-    Humanize:
-    <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
-      <option value="light">Light</option>
-      <option value="medium">Medium</option>
-    </select>
-  </label>
-  <button onClick={humanizeAndDownload} disabled={hzBusy}>{hzBusy ? 'Humanizing…' : 'Humanize & Download'}</button>
-</div>
+      <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
+        <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
+        <label style={{marginLeft:8}}>
+          Humanize:
+          <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
+            <option value="light">Light</option>
+            <option value="medium">Medium</option>
+          </select>
+        </label>
+        <button onClick={humanizeAndDownload} disabled={hzBusy}>
+          {hzBusy ? 'Humanizing…' : 'Humanize & Download'}
+        </button>
+      </div>
 
-      
+      <div style={{fontSize:12, color:'#667', marginTop:6}}>
+        Tip: The file saves to your browser’s Downloads folder. If it fails, check Network → <code>/api/ai/humanize</code>.
+      </div>
     </div>
   );
 }
