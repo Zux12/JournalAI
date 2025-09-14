@@ -2,10 +2,11 @@ import React from 'react';
 import axios from 'axios';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useProjectState } from '../../app/state.jsx';
-import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossref } from '../../lib/refs.js';
+import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossrefDiverse, extractDois } from '../../lib/refs.js';
 import { mergeReferences, ensureRefIds } from '../../lib/refFormat.js';
 import { applyCitations } from '../../lib/citeApply.js';
 import { convertAuthorYearToMarkers } from '../../lib/citeSanitize.js';
+
 
 
 function parseCitationTokens(raw) {
@@ -105,19 +106,29 @@ export default function QnA(){
       // 1) Collect/resolve references: manual + detected + Crossref suggestions
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
-      const tokens = Array.from(new Set([...manual, ...detected]));
-      const newRefs = [];
+// 1) Tokens from manual + detected in Notes
+  const tokens = Array.from(new Set([...manual, ...detected]));
+  const newRefs = [];
+  for (const t of tokens) {
+    try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
+  }
 
-      for (const t of tokens) {
-        try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
-      }
-      try {
-        const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0,160)].filter(Boolean).join(' ');
-        const suggested = await searchCrossref(q, 3);
-        newRefs.push(...suggested);
-      } catch (e) {
-        console.warn('Crossref search failed', e);
-      }
+  // 2) Mine DOIs from all uploaded Sources
+  const sourceDois = new Set();
+  (project.sources || []).forEach(s => extractDois(s.text).forEach(d => sourceDois.add(d)));
+  for (const d of Array.from(sourceDois).slice(0, 10)) {
+    try { newRefs.push(await resolveTokenToCSL(d)); } catch {}
+  }
+
+  // 3) Crossref diverse suggestions (recent + foundational); dedupe later
+  try {
+    const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0, 160)]
+      .filter(Boolean).join(' ');
+    const suggested = await searchCrossrefDiverse(q, 5, 3);
+    newRefs.push(...suggested);
+  } catch (e) {
+    console.warn('Crossref search failed', e);
+  }
 
       // 2) Merge into project.references
       let refsAfter = null;
@@ -128,11 +139,12 @@ export default function QnA(){
       });
 
       // 3) Prepare a compact refs list for the model (limit to ~8 for focus)
-      const allItems = ensureRefIds(refsAfter.items || []);
-  const recentBatch = allItems.slice(-16);
-  // Prefer unique first-author/year pairs to avoid repeating same person
+  const allItems = ensureRefIds(refsAfter.items || []);
+  const recentBatch = allItems.slice(-24); // larger pool
   const uniq = [];
-  const seen = new Set();
+  const seen = new Set(); // firstAuthor|year
+
+      
   for (const it of recentBatch) {
     const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author').toLowerCase();
     const yr = String(it?.issued?.['date-parts']?.[0]?.[0] || it?.issued?.year || '');
@@ -140,7 +152,7 @@ export default function QnA(){
     if (seen.has(k)) continue;
     seen.add(k);
     uniq.push(it);
-    if (uniq.length >= 8) break;
+    if (uniq.length >= 12) break;  // feed more distinct refs
   }
   const aiRefs = uniq.map(toAIRefStub);
 
