@@ -2,7 +2,8 @@ import React from 'react';
 import axios from 'axios';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useProjectState } from '../../app/state.jsx';
-import { fetchByDOI, fetchByPMID, fetchByArXiv } from '../../lib/refs.js';
+import { fetchByDOI, fetchByPMID, fetchByArXiv, } from '../../lib/refs.js';
+import { searchCrossref } from '../../lib/refs.js';
 import { mergeReferences, formatInText } from '../../lib/refFormat.js';
 
 function parseCitationTokens(raw) {
@@ -11,27 +12,24 @@ function parseCitationTokens(raw) {
   return t.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
 }
 
-// NEW: auto-detect DOIs / PMIDs / arXiv IDs inside free text
 function detectIdsFromText(str){
   const text = String(str || '');
   const tokens = new Set();
 
-  // DOI (robust)
+  // DOI
   const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
   let m;
-  while ((m = doiRe.exec(text))) {
-    tokens.add(m[0].replace(/[).,;]+$/, ''));
-  }
+  while ((m = doiRe.exec(text))) tokens.add(m[0].replace(/[).,;]+$/, ''));
 
-  // PMID (pmid:123 or PMID 12345678)
+  // PMID
   const pmidTagRe = /\bpmid[:\s]*([0-9]{6,9})\b/gi;
   while ((m = pmidTagRe.exec(text))) tokens.add(`pmid:${m[1]}`);
 
-  // arXiv modern (e.g., 2024.01234 or arXiv:2024.01234v2)
+  // arXiv modern
   const arxivRe = /\barxiv[:\s]*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/gi;
   while ((m = arxivRe.exec(text))) tokens.add(`arxiv:${m[1]}`);
 
-  // arXiv legacy (e.g., cs.DL/0102034)
+  // arXiv legacy
   const arxivOld = /\barxiv[:\s]*([a-z\-]+(?:\.[a-z\-]+)?\/[0-9]{7}(?:v\d+)?)\b/gi;
   while ((m = arxivOld.exec(text))) tokens.add(`arxiv:${m[1]}`);
 
@@ -81,7 +79,7 @@ export default function QnA(){
   const id = current.id;
   const [tone, setTone]   = React.useState((project.sections[id]?.tone)  || 'neutral');
   const [notes, setNotes] = React.useState((project.sections[id]?.notes) || '');
-  const [cites, setCites] = React.useState((project.sections[id]?.cites) || ''); // optional manual field
+  const [cites, setCites] = React.useState((project.sections[id]?.cites) || '');
   const draft = project.sections[id]?.draft || '';
   const [busy, setBusy] = React.useState(false);
 
@@ -105,25 +103,44 @@ export default function QnA(){
   async function draftWithAI(){
     setBusy(true);
     try{
-      // 1) Collect citations: manual field + auto-detected from Notes
+      // 1) Gather citations: manual + auto-detected
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
-      const tokens = Array.from(new Set([...manual, ...detected]));
+      let tokens = Array.from(new Set([...manual, ...detected]));
 
-      // 2) Resolve to CSL-JSON and merge into project.references
+      // 2) If none provided/detected, auto-suggest via Crossref using a query from notes+title+section
       const newRefs = [];
-      for (const t of tokens) {
-        try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
+      if (tokens.length === 0) {
+        const q = [
+          project.metadata.title || '',
+          project.metadata.discipline || '',
+          current.name || '',
+          String(notes).slice(0, 160)
+        ].filter(Boolean).join(' ');
+        try {
+          const suggested = await searchCrossref(q, 3); // take top 3
+          newRefs.push(...suggested);
+        } catch (e) {
+          console.warn('Crossref search failed', e);
+        }
+      } else {
+        // Resolve provided/detected tokens
+        for (const t of tokens) {
+          try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
+        }
       }
 
+      // 3) Merge references and capture keys for in-text formatting
+      let refsAfter = null;
       let keysUsed = [];
       update(p => {
         const merged = mergeReferences(p.references, newRefs);
+        refsAfter = merged;
         keysUsed = (newRefs || []).map(r => (r.DOI ? `doi:${String(r.DOI).toLowerCase()}` : (r.id || r.title || '')).toLowerCase());
         return { ...p, references: merged };
       });
 
-      // 3) Draft the section from notes
+      // 4) Draft the section from notes
       const { data } = await axios.post('/api/ai/draft', {
         sectionName: current.name,
         tone,
@@ -137,9 +154,9 @@ export default function QnA(){
       });
       let text = data.text || '';
 
-      // 4) Insert in-text citation for the detected/entered refs
-      if (keysUsed.length) {
-        const intext = formatInText(project.styleId, (project.references || {}), keysUsed);
+      // 5) Insert in-text citation based on merged refs (if any were added)
+      if (keysUsed.length && refsAfter) {
+        const intext = formatInText(project.styleId, refsAfter, keysUsed);
         if (intext) {
           const parts = text.split('\n').filter(Boolean);
           if (parts.length) parts[0] = parts[0].trim().replace(/\s*$/, '') + ' ' + intext;
@@ -174,7 +191,7 @@ export default function QnA(){
         <div style={{marginTop:10}}>
           <label>(Optional) Citations for this section</label>
           <input className="input" value={cites} onChange={e=>onCitesChange(e.target.value)} placeholder="e.g., 10.1038/nmeth.4823, pmid:12345678, arxiv:2401.01234"/>
-          <div className="warn" style={{marginTop:6}}>Tip: We now auto-detect citations inside Notes, so this field is optional.</div>
+          <div className="warn" style={{marginTop:6}}>If empty, we’ll auto-suggest references from Crossref using your notes/title.</div>
         </div>
 
         <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr auto', gap:8}}>
