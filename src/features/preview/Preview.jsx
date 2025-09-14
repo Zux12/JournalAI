@@ -1,6 +1,6 @@
 import React from 'react';
 import { useProjectState } from '../../app/state.jsx';
-import { formatBibliography } from '../../lib/refFormat.js';
+import { formatBibliographyCitedOnly } from '../../lib/refFormat.js';
 
 export default function Preview(){
   const { project } = useProjectState();
