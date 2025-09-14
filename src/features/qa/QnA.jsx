@@ -6,18 +6,17 @@ import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossrefDiverse, extractDo
 import { mergeReferences, ensureRefIds, formatInText } from '../../lib/refFormat.js';
 import { applyCitations } from '../../lib/citeApply.js';
 import { convertAuthorYearToMarkers } from '../../lib/citeSanitize.js';
+import { computeSectionStats } from '../../lib/sectionCheck.js';
 
 function parseCitationTokens(raw) {
   const t = String(raw || '').trim();
   if (!t) return [];
   return t.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
 }
-
 function detectIdsFromText(str){
   const text = String(str || '');
   const tokens = new Set();
-  const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
-  let m;
+  const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi; let m;
   while ((m = doiRe.exec(text))) tokens.add(m[0].replace(/[).,;]+$/, ''));
   const pmidTagRe = /\bpmid[:\s]*([0-9]{6,9})\b/gi;
   while ((m = pmidTagRe.exec(text))) tokens.add(`pmid:${m[1]}`);
@@ -27,7 +26,6 @@ function detectIdsFromText(str){
   while ((m = arxivOld.exec(text))) tokens.add(`arxiv:${m[1]}`);
   return Array.from(tokens);
 }
-
 async function resolveTokenToCSL(token) {
   const low = token.toLowerCase();
   if (low.startsWith('doi:') || low.startsWith('10.')) return await fetchByDOI(low.replace(/^doi:/,''));
@@ -38,7 +36,6 @@ async function resolveTokenToCSL(token) {
   if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(token)) return await fetchByArXiv(token);
   return { type:'article-journal', title: token, author:[{ family:'Unknown', given:'' }], issued:{ 'date-parts': [[ new Date().getFullYear() ]] }, id: token };
 }
-
 function toAIRefStub(entry) {
   const author = entry?.author?.[0];
   const authorName = author?.family || author?.literal || 'Author';
@@ -77,11 +74,13 @@ export default function QnA(){
   const [lengthPreset, setLen]  = React.useState('extended');      // brief|standard|extended|comprehensive
   const [paragraphs, setParas]  = React.useState(4);
   const draft = project.sections[id]?.draft || '';
-  const wordCount = (draft || '').trim() ? (draft.trim().split(/\s+/).length) : 0;
-  // Rough count: numeric or author-date citations
-  const citeCount = ((draft || '').match(/\[[0-9].*?\]|\(.*?\d{4}.*?\)/g) || []).length;
-
   const [busy, setBusy] = React.useState(false);
+
+  // Review modal state
+  const [reviewOpen, setReviewOpen] = React.useState(false);
+  const [suggested, setSuggested] = React.useState([]); // CSL-JSON
+  const [selectedKeys, setSelectedKeys] = React.useState([]); // _key list
+  const confirmedRefBuffer = React.useRef([]); // pending confirmed refs for accept/skip
 
   React.useEffect(() => {
     setTone((project.sections[id]?.tone)  || 'neutral');
@@ -100,10 +99,11 @@ export default function QnA(){
   const prevId = idx > 0 ? active[idx - 1].id : null;
   const nextId = idx >= 0 && idx < active.length - 1 ? active[idx + 1].id : null;
 
-  async function draftWithAI(){
+  // === Draft flow with Review Modal ===
+  async function startDraftFlow(){
     setBusy(true);
     try{
-      // Density knobs (more refs for higher density)
+      // density knobs
       const cfgByDensity = {
         normal:  { rowsRecent:5,  rowsOld:3,  aiCap:10, sourceCap:8  },
         dense:   { rowsRecent:8,  rowsOld:5,  aiCap:12, sourceCap:10 },
@@ -112,84 +112,105 @@ export default function QnA(){
       };
       const cfg = cfgByDensity[density] || cfgByDensity.dense;
 
-      // 1) Gather references: manual + detected + mined from Sources + Crossref diverse
+      // 1) Resolve manual+detected tokens
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
       const tokens = Array.from(new Set([...manual, ...detected]));
-      const newRefs = [];
-      for (const t of tokens) { try { newRefs.push(await resolveTokenToCSL(t)); } catch{} }
+      const confirmed = [];
+      for (const t of tokens) { try { confirmed.push(await resolveTokenToCSL(t)); } catch{} }
 
+      // 2) Mine DOIs from Sources
       const sourceDois = new Set();
       (project.sources || []).forEach(s => extractDois(s.text).forEach(d => sourceDois.add(d)));
-      for (const d of Array.from(sourceDois).slice(0, cfg.sourceCap)) {
-        try { newRefs.push(await resolveTokenToCSL(d)); } catch {}
-      }
+      for (const d of Array.from(sourceDois).slice(0, cfg.sourceCap)) { try { confirmed.push(await resolveTokenToCSL(d)); } catch {} }
 
+      // 3) Crossref diverse suggestions (to be reviewed)
+      let suggestions = [];
       try {
         const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0,160)]
           .filter(Boolean).join(' ');
-        const suggested = await searchCrossrefDiverse(q, cfg.rowsRecent, cfg.rowsOld);
-        newRefs.push(...suggested);
+        suggestions = await searchCrossrefDiverse(q, cfg.rowsRecent, cfg.rowsOld);
       } catch {}
 
-      // 2) Merge -> project.references
-      let refsAfter = null;
-      update(p => {
-        const merged = mergeReferences(p.references, newRefs);
-        refsAfter = merged;
-        return { ...p, references: merged };
-      });
-
-      // 3) Build compact, diverse list (distinct first-author|year), more capacity for higher density
-      const allItems = ensureRefIds(refsAfter.items || []);
-      const recentBatch = allItems.slice(-32);
-      const uniq = [];
-      const seen = new Set();
-      for (const it of recentBatch) {
-        const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author').toLowerCase();
-        const yr = String(it?.issued?.['date-parts']?.[0]?.[0] || it?.issued?.year || '');
-        const k = fam + '|' + yr;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        uniq.push(it);
-        if (uniq.length >= cfg.aiCap) break;
+      // If there are suggestions, open review modal
+      confirmedRefBuffer.current = confirmed;
+      if (suggestions.length) {
+        // ensure _key for selection
+        const withKeys = ensureRefIds(suggestions);
+        setSuggested(withKeys);
+        setSelectedKeys(withKeys.map(r => r._key)); // default: all selected
+        setReviewOpen(true);
+      } else {
+        // Proceed directly
+        await proceedDraft(confirmed, []);
       }
-      const aiRefs = uniq.map(toAIRefStub);
+    } finally {
+      setBusy(false);
+    }
+  }
 
-      // 4) Ask AI to draft with markers and with length/density controls
-      const { data } = await axios.post('/api/ai/draft', {
-        sectionName: current.name,
-        tone,
-        styleId: project.styleId,
-        context: {
-          title: project.metadata.title,
-          discipline: project.metadata.discipline,
-          keywords: project.metadata.keywords,
-          sectionNotes: notes,
-          refs: aiRefs,
-          citationDensity: density,
-          lengthPreset,
-          paragraphs
-        }
-      });
-      let aiText = data.text || '';
+  async function proceedDraft(confirmedRefs, selectedSuggestionKeys){
+    // Merge refs
+    let refsAfter = null;
+    update(p => {
+      const selectedSuggestions = (suggested || []).filter(r => selectedSuggestionKeys.includes(r._key));
+      const merged = mergeReferences(p.references, [...confirmedRefs, ...selectedSuggestions]);
+      refsAfter = merged;
+      return { ...p, references: merged };
+    });
 
-      // 5) Convert stray (Author, Year) → markers, then apply style-aware citations
-      const sanitized = convertAuthorYearToMarkers(aiText, refsAfter);
- setSectionDraftRaw(id, sanitized.text); // keep markers for export renumbering
- const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
- setSectionDraft(id, finalText);
-      setSectionCitedKeys(id, citedKeys);
+    // Build diverse AI list
+    const cfgByDensity = { normal:10, dense:12, extra:16, extreme:20 };
+    const cap = cfgByDensity[density] || 12;
+    const allItems = ensureRefIds(refsAfter.items || []);
+    const recentBatch = allItems.slice(-32);
+    const uniq = [];
+    const seen = new Set(); // firstAuthor|year
+    for (const it of recentBatch) {
+      const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author').toLowerCase();
+      const yr = String(it?.issued?.['date-parts']?.[0]?.[0] || it?.issued?.year || '');
+      const k = fam + '|' + yr;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(it);
+      if (uniq.length >= cap) break;
+    }
+    const aiRefs = uniq.map(toAIRefStub);
 
-    } finally { setBusy(false); }
+    // Ask AI
+    const { data } = await axios.post('/api/ai/draft', {
+      sectionName: current.name,
+      tone,
+      styleId: project.styleId,
+      context: {
+        title: project.metadata.title,
+        discipline: project.metadata.discipline,
+        keywords: project.metadata.keywords,
+        sectionNotes: notes,
+        refs: aiRefs,
+        citationDensity: density,
+        lengthPreset,
+        paragraphs
+      }
+    });
+    let aiText = data.text || '';
+
+    // Convert any stray (Author, Year) → markers, then apply citations
+    const sanitized = convertAuthorYearToMarkers(aiText, refsAfter);
+    setSectionDraftRaw(id, sanitized.text);
+    const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
+    setSectionDraft(id, finalText);
+    setSectionCitedKeys(id, citedKeys);
+
+    setReviewOpen(false);
   }
 
   // Manual insert at cursor
   const draftRef = React.useRef(null);
   const [showInsert, setShowInsert] = React.useState(false);
-  const [selectedKeys, setSelectedKeys] = React.useState([]);
+  const [pickKeys, setPickKeys] = React.useState([]);
   const items = ensureRefIds(project.references?.items || []);
-  function toggleKey(k){ setSelectedKeys(prev => prev.includes(k) ? prev.filter(x=>x!==k) : [...prev, k]); }
+  function togglePick(k){ setPickKeys(prev => prev.includes(k) ? prev.filter(x=>x!==k) : [...prev, k]); }
   function insertAtCursor(textarea, snippet){
     const el = textarea;
     const start = el.selectionStart ?? el.value.length;
@@ -202,13 +223,13 @@ export default function QnA(){
     return el.value;
   }
   function insertSelectedCitations(){
-    if (!selectedKeys.length) return;
-    const inText = formatInText(project.styleId, project.references || {}, selectedKeys);
+    if (!pickKeys.length) return;
+    const inText = formatInText(project.styleId, project.references || {}, pickKeys);
     const nextVal = insertAtCursor(draftRef.current, (inText ? ` ${inText}` : ''));
     setSectionDraft(id, nextVal);
-    setSectionCitedKeys(id, Array.from(new Set([...(project.sections[id]?.citedKeys || []), ...selectedKeys.map(k=>k.toLowerCase())])));
+    setSectionCitedKeys(id, Array.from(new Set([...(project.sections[id]?.citedKeys || []), ...pickKeys.map(k=>k.toLowerCase())])));
     setShowInsert(false);
-    setSelectedKeys([]);
+    setPickKeys([]);
   }
   function exportSection(){
     const blob = new Blob([draft || ''], { type:'text/plain' });
@@ -217,9 +238,8 @@ export default function QnA(){
     URL.revokeObjectURL(url);
   }
 
-  const citedKeys = project.sections[id]?.citedKeys || [];
-  const byKey = new Map(items.map(it => [it._key, it]));
-  const chips = citedKeys.map(k => byKey.get(String(k).toLowerCase())).filter(Boolean);
+  // Stats/checklist
+  const stats = computeSectionStats(draft, project.styleId, density, current.name);
 
   return (
     <div className="row cols-2">
@@ -273,14 +293,15 @@ export default function QnA(){
               <option value="comprehensive">Comprehensive (1200–1500)</option>
             </select>
           </div>
-          <button className="btn" onClick={draftWithAI} disabled={busy}>{busy ? 'Drafting…' : 'Draft with AI'}</button>
+          <button className="btn" onClick={startDraftFlow} disabled={busy}>{busy ? 'Drafting…' : 'Draft with AI'}</button>
           <button onClick={exportSection} disabled={!draft}>Export This Section</button>
         </div>
 
         <div className="warn" style={{marginTop:12}}>
-          AI will write to your chosen length and density, inserting inline citations where sources are used.
+          AI inserts inline citations where sources are used. You can also manually insert citations at the cursor.
         </div>
 
+        {/* Manual insert citations */}
         <div style={{marginTop:12}}>
           <button onClick={()=>setShowInsert(v=>!v)}>➕ Insert citation at cursor</button>
           {showInsert && (
@@ -293,15 +314,15 @@ export default function QnA(){
                   const label = `${fam} ${yr} — ${String(it.title||'').slice(0,80)}`;
                   return (
                     <label key={it._key} style={{display:'block', padding:'4px 0'}}>
-                      <input type="checkbox" checked={selectedKeys.includes(it._key)} onChange={()=>setSelectedKeys(prev => prev.includes(it._key) ? prev.filter(x=>x!==it._key) : [...prev, it._key])} />
+                      <input type="checkbox" checked={pickKeys.includes(it._key)} onChange={()=>togglePick(it._key)} />
                       <span style={{marginLeft:8}}>{label}</span>
                     </label>
                   );
                 })}
               </div>
               <div style={{display:'flex', gap:8, marginTop:8}}>
-                <button className="btn" onClick={insertSelectedCitations} disabled={!selectedKeys.length}>Insert</button>
-                <button onClick={()=>{ setShowInsert(false); setSelectedKeys([]); }}>Cancel</button>
+                <button className="btn" onClick={insertSelectedCitations} disabled={!pickKeys.length}>Insert</button>
+                <button onClick={()=>{ setShowInsert(false); setPickKeys([]); }}>Cancel</button>
               </div>
             </div>
           )}
@@ -311,23 +332,52 @@ export default function QnA(){
       <div className="card">
         <h3>Live Draft</h3>
         <textarea ref={draftRef} className="input" rows="18" value={draft} onChange={e=>setSectionDraft(id, e.target.value)} />
-        <div style={{marginTop:6, fontSize:12, color:'#667'}}>
-  Words: {wordCount} • Inline citations: {citeCount} {density ? `• Density: ${density}` : ''}
-</div>
-
-        <div style={{marginTop:8}}>
-          {(project.sections[id]?.citedKeys || []).length>0 && <div style={{fontSize:12, color:'#667', marginBottom:6}}>References used in this section:</div>}
-          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
-            {(project.sections[id]?.citedKeys || []).map(k=>{
-              const it = items.find(x => x._key === k);
-              if(!it) return null;
-              const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author');
-              const yr = it?.issued?.['date-parts']?.[0]?.[0] || '';
-              return <span key={k} className="badge">{fam} {yr}</span>;
-            })}
-          </div>
+        {/* Stats / checklist */}
+        <div style={{marginTop:8, fontSize:12}}>
+          <div style={{color:'#111'}}>Words: {stats.words} • Sentences: {stats.sentences} • Inline citations: {stats.cites} (target ≈ {stats.expected})</div>
+          {stats.warnings.length>0 && (
+            <ul style={{margin:'6px 0 0 16px', color:'#b7791f'}}>
+              {stats.warnings.map((w,i)=><li key={i}>{w}</li>)}
+            </ul>
+          )}
         </div>
       </div>
+
+      {/* Review Modal */}
+      {reviewOpen && (
+        <div style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.35)',
+          display:'flex', alignItems:'center', justifyContent:'center', zIndex:50
+        }}>
+          <div className="card" style={{width:'min(720px, 92vw)'}}>
+            <h3>Review suggested references</h3>
+            <p style={{color:'#667'}}>Uncheck any suggestions you don’t want to include for this section. Confirmed/Detected refs are already included.</p>
+            <div style={{maxHeight:'40vh', overflow:'auto', marginTop:8}}>
+              {suggested.map(it=>{
+                const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author');
+                const yr  = it?.issued?.['date-parts']?.[0]?.[0] || '';
+                const title = String(it.title||'').slice(0,120);
+                const checked = selectedKeys.includes(it._key);
+                return (
+                  <label key={it._key} style={{display:'block', padding:'6px 0'}}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={()=>setSelectedKeys(prev => checked ? prev.filter(k=>k!==it._key) : [...prev, it._key])}
+                    />
+                    <span style={{marginLeft:8}}><strong>{fam} {yr}</strong> — {title}</span>
+                  </label>
+                );
+              })}
+              {suggested.length===0 && <div style={{color:'#667'}}>No suggestions.</div>}
+            </div>
+            <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:12}}>
+              <button onClick={() => { setReviewOpen(false); proceedDraft(confirmedRefBuffer.current, []); }}>Skip</button>
+              <button className="btn" onClick={() => { const keys = [...selectedKeys]; setReviewOpen(false); proceedDraft(confirmedRefBuffer.current, keys); }}>Accept Selected</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
