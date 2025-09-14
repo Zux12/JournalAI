@@ -11,20 +11,26 @@ export default function Preview(){
   }
 
   function buildManuscriptText(){
-    // 1) All non-skipped, non-refs sections
-    const body = order
-      .filter(s => !s.skipped && s.id !== 'refs')
-      .map(s => `# ${s.name}\n\n${sectionText(s)}`)
-      .join('\n\n');
+  const body = (project.planner.sections || [])
+    .filter(s => !s.skipped && s.id !== 'refs')
+    .map(s => `# ${s.name}\n\n${project.sections[s.id]?.draft || ''}`)
+    .join('\n\n');
 
-    // 2) Bibliography (always appended if any refs exist)
-    const refsBlock = formatBibliography(project.styleId, project.references || {});
-    const refsText = refsBlock?.trim()
-      ? `\n\n# References\n\n${refsBlock}`
-      : '';
+  // Collect cited keys from all sections
+  const citedSet = new Set();
+  Object.values(project.sections || {}).forEach(sec => {
+    (sec?.citedKeys || []).forEach(k => citedSet.add(String(k).toLowerCase()));
+  });
+  const citedKeys = Array.from(citedSet);
 
-    return body + refsText;
-  }
+  const refsBlock = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
+  const refsText = refsBlock?.trim()
+    ? `\n\n# References\n\n${refsBlock}`
+    : ''; // if nothing cited, omit the block
+
+  return body + refsText;
+}
+
 
   function exportAll(){
     const text = buildManuscriptText();
