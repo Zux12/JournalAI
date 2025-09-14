@@ -16,6 +16,7 @@ export default function App() {
           <Link to="/metadata">Metadata</Link>
           <Link to="/planner">Section Planner</Link>
           <Link to="/qa">Guided Q&A</Link>
+          <Link to="/sources">Sources (PDF / OCR)</Link>
           <Link to="/figures">Figures & Tables</Link>
           <Link to="/references">References</Link>
           <Link to="/declarations">Declarations</Link>
