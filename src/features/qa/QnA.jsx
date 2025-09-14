@@ -2,9 +2,9 @@ import React from 'react';
 import axios from 'axios';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useProjectState } from '../../app/state.jsx';
-import { fetchByDOI, fetchByPMID, fetchByArXiv, } from '../../lib/refs.js';
-import { searchCrossref } from '../../lib/refs.js';
-import { mergeReferences, formatInText } from '../../lib/refFormat.js';
+import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossref } from '../../lib/refs.js';
+import { mergeReferences, ensureRefIds, formatInText } from '../../lib/refFormat.js';
+import { applyCitations } from '../../lib/citeApply.js';
 
 function parseCitationTokens(raw) {
   const t = String(raw || '').trim();
@@ -15,24 +15,19 @@ function parseCitationTokens(raw) {
 function detectIdsFromText(str){
   const text = String(str || '');
   const tokens = new Set();
-
   // DOI
   const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
   let m;
   while ((m = doiRe.exec(text))) tokens.add(m[0].replace(/[).,;]+$/, ''));
-
   // PMID
   const pmidTagRe = /\bpmid[:\s]*([0-9]{6,9})\b/gi;
   while ((m = pmidTagRe.exec(text))) tokens.add(`pmid:${m[1]}`);
-
   // arXiv modern
   const arxivRe = /\barxiv[:\s]*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/gi;
   while ((m = arxivRe.exec(text))) tokens.add(`arxiv:${m[1]}`);
-
   // arXiv legacy
   const arxivOld = /\barxiv[:\s]*([a-z\-]+(?:\.[a-z\-]+)?\/[0-9]{7}(?:v\d+)?)\b/gi;
   while ((m = arxivOld.exec(text))) tokens.add(`arxiv:${m[1]}`);
-
   return Array.from(tokens);
 }
 
@@ -44,13 +39,14 @@ async function resolveTokenToCSL(token) {
   if (/^10\.\d{4,9}\//.test(token)) return await fetchByDOI(token);
   if (/^\d{6,9}$/.test(token)) return await fetchByPMID(token);
   if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(token)) return await fetchByArXiv(token);
-  return {
-    type:'article-journal',
-    title: token,
-    author:[{ family:'Unknown', given:'' }],
-    issued:{ 'date-parts': [[ new Date().getFullYear() ]] },
-    id: token
-  };
+  return { type:'article-journal', title: token, author:[{ family:'Unknown', given:'' }], issued:{ 'date-parts': [[ new Date().getFullYear() ]] }, id: token };
+}
+
+function toAIRefStub(entry) {
+  const author = entry?.author?.[0];
+  const authorName = author?.family || author?.literal || 'Author';
+  const year = entry?.issued?.['date-parts']?.[0]?.[0] || '';
+  return { key: entry._key, author: authorName, year, title: String(entry.title || '').slice(0, 160) };
 }
 
 export default function QnA(){
@@ -80,6 +76,7 @@ export default function QnA(){
   const [tone, setTone]   = React.useState((project.sections[id]?.tone)  || 'neutral');
   const [notes, setNotes] = React.useState((project.sections[id]?.notes) || '');
   const [cites, setCites] = React.useState((project.sections[id]?.cites) || '');
+  const [density, setDensity] = React.useState('dense'); // dense by default per your request
   const draft = project.sections[id]?.draft || '';
   const [busy, setBusy] = React.useState(false);
 
@@ -103,43 +100,37 @@ export default function QnA(){
   async function draftWithAI(){
     setBusy(true);
     try{
-      // 1) Gather citations: manual + auto-detected
+      // 1) Collect/resolve references: manual + detected + Crossref suggestions
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
-
       const tokens = Array.from(new Set([...manual, ...detected]));
       const newRefs = [];
 
-      // Resolve provided/detected tokens (if any)
       for (const t of tokens) {
         try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
       }
-
-      // Always add top Crossref suggestions as well (merge will dedupe)
       try {
-        const q = [
-          project.metadata.title || '',
-          project.metadata.discipline || '',
-          current.name || '',
-          String(notes).slice(0, 160)
-        ].filter(Boolean).join(' ');
+        const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0,160)].filter(Boolean).join(' ');
         const suggested = await searchCrossref(q, 3);
         newRefs.push(...suggested);
       } catch (e) {
         console.warn('Crossref search failed', e);
       }
 
-      // 3) Merge references and capture keys for in-text formatting
+      // 2) Merge into project.references
       let refsAfter = null;
-      let keysUsed = [];
       update(p => {
         const merged = mergeReferences(p.references, newRefs);
         refsAfter = merged;
-        keysUsed = (newRefs || []).map(r => (r.DOI ? `doi:${String(r.DOI).toLowerCase()}` : (r.id || r.title || '')).toLowerCase());
         return { ...p, references: merged };
       });
 
-      // 4) Draft the section from notes
+      // 3) Prepare a compact refs list for the model (limit to ~8 for focus)
+      const allItems = ensureRefIds(refsAfter.items || []);
+      const recentBatch = allItems.slice(-12); // bias towards newly added
+      const aiRefs = recentBatch.slice(0, 8).map(toAIRefStub);
+
+      // 4) Ask AI to draft with inline markers {{cite:key,...}}
       const { data } = await axios.post('/api/ai/draft', {
         sectionName: current.name,
         tone,
@@ -148,23 +139,18 @@ export default function QnA(){
           title: project.metadata.title,
           discipline: project.metadata.discipline,
           keywords: project.metadata.keywords,
-          sectionNotes: notes
+          sectionNotes: notes,
+          refs: aiRefs,
+          citationDensity: density
         }
       });
-      let text = data.text || '';
+      let aiText = data.text || '';
 
-      // 5) Insert in-text citation based on merged refs (if any were added)
-      if (keysUsed.length && refsAfter) {
-        const intext = formatInText(project.styleId, refsAfter, keysUsed);
-        if (intext) {
-          const parts = text.split('\n').filter(Boolean);
-          if (parts.length) parts[0] = parts[0].trim().replace(/\s*$/, '') + ' ' + intext;
-          text = parts.join('\n') || (text + ' ' + intext);
-        }
-      }
+      // 5) Replace markers with style-aware in-text citations and record used keys
+      const { text: finalText, citedKeys } = applyCitations(aiText, project.styleId, refsAfter);
+      setSectionDraft(id, finalText);
+      setSectionCitedKeys(id, citedKeys);
 
-      setSectionDraft(id, text);
-      setSectionCitedKeys(id, keysUsed);
     } finally { setBusy(false); }
   }
 
@@ -186,15 +172,14 @@ export default function QnA(){
         <h2 style={{marginTop:12}}>{current.name} — Guided Q&A</h2>
 
         <label>Notes / key points for this section</label>
-        <textarea className="input" rows="8" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Paste bullets, numbers, and you can include DOIs/PMIDs/arXiv anywhere here."/>
+        <textarea className="input" rows="8" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Paste bullets, numbers, and references (DOIs/PMIDs/arXiv) if you have them."/>
 
         <div style={{marginTop:10}}>
           <label>(Optional) Citations for this section</label>
           <input className="input" value={cites} onChange={e=>onCitesChange(e.target.value)} placeholder="e.g., 10.1038/nmeth.4823, pmid:12345678, arxiv:2401.01234"/>
-          <div className="warn" style={{marginTop:6}}>If empty, we’ll auto-suggest references from Crossref using your notes/title.</div>
         </div>
 
-        <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr auto', gap:8}}>
+        <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr 1fr auto', gap:8}}>
           <div>
             <label>Tone</label>
             <select className="input" value={tone} onChange={e=>setTone(e.target.value)}>
@@ -203,7 +188,18 @@ export default function QnA(){
               <option value="narrative">Narrative / Engaging</option>
             </select>
           </div>
+          <div>
+            <label>Citation density</label>
+            <select className="input" value={density} onChange={e=>setDensity(e.target.value)}>
+              <option value="normal">Normal</option>
+              <option value="dense">Dense (more citations)</option>
+            </select>
+          </div>
           <button className="btn" onClick={draftWithAI} disabled={busy}>{busy ? 'Drafting…' : 'Draft with AI'}</button>
+        </div>
+
+        <div className="warn" style={{marginTop:12}}>
+          The AI will insert inline citations right where sources are used, then we’ll format them per your chosen style.
         </div>
       </div>
 
