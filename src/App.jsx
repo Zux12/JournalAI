@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { useProjectState } from './app/state.js';
+import { useProjectState } from './app/state.jsx';
 import './app/styles.css';
 
 export default function App() {
