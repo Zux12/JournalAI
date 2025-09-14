@@ -1,36 +1,35 @@
 // Replace {fig:<id>} -> "Figure N" and {tab:<id>} -> "Table M"
 // Build numbering by first appearance across all sections (raw drafts with markers if present).
-
 export function collectFigureTableMaps(sections, figures = [], tables = []) {
-  const figIds = new Set(figures.map(f => String(f.id || f.figId || '').toLowerCase()).filter(Boolean));
-  const tabIds = new Set(tables.map(t => String(t.id || t.tabId || '').toLowerCase()).filter(Boolean));
+  const figIds = figures.map(f => String(f.id || f.figId || '').toLowerCase()).filter(Boolean);
+  const tabIds = tables.map(t => String(t.id || t.tabId || '').toLowerCase()).filter(Boolean);
 
   const figMap = new Map(); // idLower -> number
   const tabMap = new Map(); // idLower -> number
   let f = 1, t = 1;
 
-  const eachText = [];
-  Object.entries(sections || {}).forEach(([id, sec]) => {
-    const raw = sec?.draftRaw || sec?.draft || '';
-    eachText.push(String(raw));
-  });
+  const texts = Object.values(sections || {}).map(sec => String(sec?.draftRaw || sec?.draft || ''));
 
   const figRe = /\{fig:([a-z0-9\-_]+)\}/gi;
   const tabRe = /\{tab:([a-z0-9\-_]+)\}/gi;
 
-  for (const txt of eachText) {
+  // Pass 1: assign numbers by first appearance in text
+  for (const txt of texts) {
     let m;
     while ((m = figRe.exec(txt))) {
       const k = m[1].toLowerCase();
-      if (figIds.size && !figIds.has(k)) continue;
       if (!figMap.has(k)) figMap.set(k, f++);
     }
     while ((m = tabRe.exec(txt))) {
       const k = m[1].toLowerCase();
-      if (tabIds.size && !tabIds.has(k)) continue;
       if (!tabMap.has(k)) tabMap.set(k, t++);
     }
   }
+
+  // Pass 2 (fallback): assign numbers to uncited items in upload order
+  for (const k of figIds) if (k && !figMap.has(k)) figMap.set(k, f++);
+  for (const k of tabIds) if (k && !tabMap.has(k)) tabMap.set(k, t++);
+
   return { figMap, tabMap };
 }
 
