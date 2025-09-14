@@ -1,4 +1,5 @@
 import React from 'react';
+import axios from 'axios';
 import * as pdfjsLib from 'pdfjs-dist';
 import { useProjectState } from '../../app/state.jsx';
 import { ocrPdf } from '../../lib/ocr.js';
@@ -7,9 +8,11 @@ import { extractTextFromPDF } from '../../lib/pdf.js';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export default function Sources(){
-  const { project, setSources } = useProjectState();
-  const [queue, setQueue] = React.useState([]); // in-progress items with progress
+  const { project, setSources, setSectionNotes } = useProjectState();
+  const [queue, setQueue] = React.useState([]);
   const [error, setError] = React.useState('');
+  const [busySumm, setBusySumm] = React.useState({}); // id -> boolean
+  const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id !== 'refs');
 
   function addToSources(entry){
     const next = [...(project.sources || []), entry];
@@ -25,20 +28,17 @@ export default function Sources(){
       setQueue(prev=>[...prev, { id, name: f.name, progress: 0, status: 'extracting' }]);
 
       try {
-        // First try simple text extraction
         const text = await extractTextFromPDF(f);
-        if (text && text.replace(/\s+/g,' ').trim().length > 120) {
-          addToSources({ id, name: f.name, bytes: f.size, pages: undefined, ocrUsed: false, text });
+        const ok = text && text.replace(/\s+/g,' ').trim().length > 120;
+        if (ok) {
+          addToSources({ id, name: f.name, bytes: f.size, ocrUsed: false, text });
           setQueue(prev=>prev.map(x=>x.id===id?{...x, progress:1, status:'done'}:x));
           continue;
         }
-
-        // Fallback to OCR (likely scanned PDF)
         setQueue(prev=>prev.map(x=>x.id===id?{...x, status:'ocr'}:x));
         const ocrText = await ocrPdf(f, (p)=> setQueue(prev=>prev.map(x=>x.id===id?{...x, progress:p}:x)));
-        addToSources({ id, name: f.name, bytes: f.size, pages: undefined, ocrUsed: true, text: ocrText });
+        addToSources({ id, name: f.name, bytes: f.size, ocrUsed: true, text: ocrText });
         setQueue(prev=>prev.map(x=>x.id===id?{...x, progress:1, status:'done'}:x));
-
       } catch (err) {
         console.error(err);
         setQueue(prev=>prev.map(x=>x.id===id?{...x, status:'error'}:x));
@@ -56,14 +56,36 @@ export default function Sources(){
     alert('Copied to clipboard.');
   }
 
+  async function summarizeAndInsert(srcId, sectionId){
+    try{
+      const src = (project.sources || []).find(s => s.id === srcId);
+      if (!src || !sectionId) return;
+      setBusySumm(prev=>({ ...prev, [srcId]: true }));
+      const { data } = await axios.post('/api/ai/summarize', {
+        text: src.text,
+        maxWords: 240,
+        focus: `${project.metadata?.title || ''} – ${sectionId}`
+      });
+      const bullets = (data.summary || '').trim();
+      if (!bullets) return;
+      const existing = project.sections?.[sectionId]?.notes || '';
+      const spacer = existing ? '\n' : '';
+      setSectionNotes(sectionId, existing + spacer + bullets);
+      alert('Summary inserted into Notes.');
+    } catch(e){
+      alert('Summarize failed.');
+    } finally {
+      setBusySumm(prev=>({ ...prev, [srcId]: false }));
+    }
+  }
+
   return (
     <div className="card">
       <h2>Sources (PDF / OCR)</h2>
-      <p>Upload articles you want the AI to read. We’ll try direct text extraction first; if the PDF is scanned, OCR will run with a progress indicator.</p>
+      <p>Upload articles. We’ll extract or OCR text in-browser. Then you can summarize any source and insert the bullets into a section’s Notes.</p>
       <input type="file" accept="application/pdf" multiple onChange={handleFiles} />
       {error && <div className="warn" style={{marginTop:12}}>{error}</div>}
 
-      {/* In-progress queue */}
       {queue.length>0 && (
         <div style={{marginTop:12}}>
           <h3>In progress</h3>
@@ -79,7 +101,6 @@ export default function Sources(){
         </div>
       )}
 
-      {/* Saved sources */}
       <div style={{marginTop:16}}>
         <h3>Saved ({(project.sources||[]).length})</h3>
         {(project.sources||[]).map(src=>(
@@ -92,12 +113,35 @@ export default function Sources(){
                 <button onClick={()=>removeSource(src.id)}>Remove</button>
               </div>
             </div>
+
             <details style={{marginTop:8}}>
               <summary>Show extracted text</summary>
               <div style={{whiteSpace:'pre-wrap', marginTop:8, background:'#fff', border:'1px solid #e5e7eb', borderRadius:8, padding:12, maxHeight:240, overflow:'auto'}}>
                 {src.text}
               </div>
             </details>
+
+            <div className="row cols-2" style={{marginTop:8, alignItems:'end'}}>
+              <div>
+                <label>Insert summary into section</label>
+                <select id={`sec-${src.id}`} className="input" defaultValue="">
+                  <option value="" disabled>Select section…</option>
+                  {sections.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div style={{display:'flex', gap:8}}>
+                <button
+                  className="btn"
+                  disabled={!!busySumm[src.id]}
+                  onClick={()=>{
+                    const sel = document.getElementById(`sec-${src.id}`);
+                    summarizeAndInsert(src.id, sel?.value);
+                  }}
+                >
+                  {busySumm[src.id] ? 'Summarizing…' : 'Summarize → Insert'}
+                </button>
+              </div>
+            </div>
           </div>
         ))}
       </div>
