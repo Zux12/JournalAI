@@ -6,7 +6,7 @@ import { fetchByDOI, fetchByPMID, fetchByArXiv, searchCrossref } from '../../lib
 import { mergeReferences, ensureRefIds } from '../../lib/refFormat.js';
 import { applyCitations } from '../../lib/citeApply.js';
 import { convertAuthorYearToMarkers } from '../../lib/citeSanitize.js';
-import { applyCitations } from '../../lib/citeApply.js';
+
 
 function parseCitationTokens(raw) {
   const t = String(raw || '').trim();
