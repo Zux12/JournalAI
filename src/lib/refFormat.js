@@ -115,3 +115,46 @@ export function formatBibliography(styleId, refs) {
   });
   return lines.join('\n');
 }
+
+
+export function formatBibliographyCitedOnly(styleId, refs, citedKeys = []) {
+  const all = ensureRefIds(refs?.items || []);
+  if (!all.length || !citedKeys.length) return '';
+
+  const keyset = new Set(citedKeys.map(k => String(k).toLowerCase()));
+  const filtered = all.filter(it => keyset.has(it._key));
+  if (!filtered.length) return '';
+
+  // For numeric styles, keep original label number based on position in full list
+  if (NUMERIC_STYLES.has(styleId)) {
+    const lines = filtered.map(it => {
+      const n = all.findIndex(x => x._key === it._key) + 1; // original label
+      const authors = (it.author || [])
+        .map(a => a.family ? `${a.family} ${a.given ? a.given[0] + '.' : ''}` : a.literal || '')
+        .filter(Boolean).join(', ');
+      const year = pubYear(it);
+      const container = it['container-title'] || '';
+      const vol = it.volume ? ` ${it.volume}` : '';
+      const issue = it.issue ? `(${it.issue})` : '';
+      const pages = it.page ? `:${it.page}` : '';
+      const doi = it.DOI ? ` doi:${it.DOI}` : (it.URL ? ` ${it.URL}` : '');
+      return `[${n}] ${authors}. ${it.title}. ${container}${vol}${issue}${pages} (${year}).${doi}`;
+    });
+    return lines.join('\n');
+  }
+
+  // Author–date family
+  const lines = filtered.map(it => {
+    const authors = (it.author || [])
+      .map(a => a.family ? `${a.family}, ${a.given ? a.given[0] + '.' : ''}` : a.literal || '')
+      .filter(Boolean).join('; ');
+    const year = pubYear(it);
+    const container = it['container-title'] || '';
+    const vol = it.volume ? ` ${it.volume}` : '';
+    const issue = it.issue ? `(${it.issue})` : '';
+    const pages = it.page ? `, ${it.page}` : '';
+    const doi = it.DOI ? ` https://doi.org/${it.DOI}` : (it.URL ? ` ${it.URL}` : '');
+    return `${authors} (${year}). ${it.title}. ${container}${vol}${issue}${pages}.${doi}`;
+  });
+  return lines.join('\n');
+}
