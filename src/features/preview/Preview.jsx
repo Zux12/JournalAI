@@ -192,6 +192,28 @@ export default function Preview(){
     })();
   }
 
+  async function exportDocx(){
+  try{
+    const text = await buildManuscriptText(); // already includes renumber/CSL/lists
+    const { data } = await axios.post(
+      '/api/export/docx',
+      { content: text, filename: 'manuscript.docx' },
+      { responseType: 'arraybuffer' }
+    );
+    const blob = new Blob([data], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'manuscript.docx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error('DOCX export failed:', err);
+    alert(`DOCX export failed: ${err?.response?.data?.error || err.message}`);
+  }
+}
+
   async function humanizeAndDownload(){
     setHzBusy(true);
     try{
