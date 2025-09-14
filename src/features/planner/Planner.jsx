@@ -1,5 +1,5 @@
 import React from 'react';
-import { useProjectState } from '../../app/state.js';
+import { useProjectState } from '../../app/state.jsx';
 
 export default function Planner(){
   const { project, setPlanner } = useProjectState();
