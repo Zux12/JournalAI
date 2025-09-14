@@ -7,20 +7,27 @@ export default function Preview(){
   const order = project.planner.sections || [];
 
   function sectionText(s){
-    if (s.id === 'refs') return renderRefs();
     return project.sections[s.id]?.draft || '';
   }
 
-  function renderRefs(){
-    const out = formatBibliography(project.styleId, project.references || {});
-    return out || '— No references added yet —';
+  function buildManuscriptText(){
+    // 1) All non-skipped, non-refs sections
+    const body = order
+      .filter(s => !s.skipped && s.id !== 'refs')
+      .map(s => `# ${s.name}\n\n${sectionText(s)}`)
+      .join('\n\n');
+
+    // 2) Bibliography (always appended if any refs exist)
+    const refsBlock = formatBibliography(project.styleId, project.references || {});
+    const refsText = refsBlock?.trim()
+      ? `\n\n# References\n\n${refsBlock}`
+      : '';
+
+    return body + refsText;
   }
 
   function exportAll(){
-    const text = order
-      .filter(s=>!s.skipped)
-      .map(s=>`# ${s.name}\n\n${sectionText(s)}`)
-      .join('\n\n');
+    const text = buildManuscriptText();
     download('manuscript.txt', text);
   }
 
@@ -31,17 +38,13 @@ export default function Preview(){
     URL.revokeObjectURL(url);
   }
 
+  const manuscript = buildManuscriptText();
+
   return (
     <div className="card">
       <h2>Preview & Export (clean text)</h2>
       <div style={{whiteSpace:'pre-wrap', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, padding:16, maxHeight:'60vh', overflow:'auto'}}>
-        {order.filter(s=>!s.skipped).map(s=>(
-          <div key={s.id}>
-            <h3>{s.name}</h3>
-            <div>{sectionText(s)}</div>
-            <hr style={{margin:'16px 0'}}/>
-          </div>
-        ))}
+        {manuscript}
       </div>
       <div style={{marginTop:12}}>
         <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
