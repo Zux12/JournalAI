@@ -159,9 +159,10 @@ export default function QnA(){
         }
       });
       let aiText = data.text || '';
-
-      // 5) Replace markers with style-aware in-text citations and record used keys
-      const { text: finalText, citedKeys } = applyCitations(aiText, project.styleId, refsAfter);
+  // Convert any stray (Author, Year) the model wrote into {{cite:...}} where possible
+  const sanitized = convertAuthorYearToMarkers(aiText, refsAfter);
+  // Now replace markers with style-aware citations
+  const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
       setSectionDraft(id, finalText);
       setSectionCitedKeys(id, citedKeys);
 
