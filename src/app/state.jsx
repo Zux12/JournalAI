@@ -52,8 +52,9 @@ export function ProjectProvider({ children }){
   const setPlanner = (planner)=>update(p=>({ ...p, planner }));
   const setSectionDraft = (id, draft)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), draft } } }));
   const setSectionNotes = (id, notes)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), notes } } }));
+  const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSources, setSectionNotes };
+  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSources, setSectionNotes, setReferences };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
