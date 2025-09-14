@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// Very light resolvers; you can harden later.
+// ------- Crossref / PubMed / arXiv resolvers -------
 
 export async function fetchByDOI(doi){
   const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
@@ -9,9 +9,8 @@ export async function fetchByDOI(doi){
 }
 
 export async function fetchByPMID(pmid){
-  const url = `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/?format=pubmed`;
-  const { data } = await axios.get(url); // parsing pubmed is non-trivial; stub as minimal
-  // For MVP you may switch to E-Utilities (esummary) JSON; here we return a minimal entry:
+  // Lightweight fallback (CORS-friendly). For MVP we return a minimal entry.
+  // You can later switch to NCBI E-Utilities JSON if needed.
   return {
     type: "article-journal",
     title: `PMID:${pmid}`,
@@ -23,41 +22,42 @@ export async function fetchByPMID(pmid){
 }
 
 export async function fetchByArXiv(id){
-  // Simple arXiv API
-  const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(id)}`;
-  const { data } = await axios.get(url);
-  // TODO: parse Atom XML properly; for now return minimal
+  // Minimal arXiv stub (Atom XML parse skipped for MVP)
   return {
-    type:"article-journal",
-    title:`arXiv:${id}`,
-    author:[{ family:"Unknown", given:"" }],
-    issued:{ "date-parts":[[new Date().getFullYear()]] },
-    "container-title":"arXiv",
+    type: "article-journal",
+    title: `arXiv:${id}`,
+    author: [{ family: "Unknown", given: "" }],
+    issued: { "date-parts": [[new Date().getFullYear()]] },
+    "container-title": "arXiv",
     id
   };
 }
 
+// ------- Helpers -------
+
 function toCSLJSON(m){
-  const authors = (m.author||[]).map(a=>({ family:a.family, given:a.given }));
+  // m can be either Crossref "message" object or an "items" element
+  const authors = (m.author || []).map(a => ({ family: a.family, given: a.given }));
+  // prefer published-print year; fallback to created year
+  const year =
+    Number(m['published-print']?.['date-parts']?.[0]?.[0]) ||
+    Number(m['published-online']?.['date-parts']?.[0]?.[0]) ||
+    Number(m.created?.['date-parts']?.[0]?.[0]) ||
+    new Date().getFullYear();
+
   return {
     type: m.type || 'article-journal',
-    title: m.title instanceof Array ? m.title[0] : m.title,
+    title: Array.isArray(m.title) ? m.title[0] : (m.title || ''),
     author: authors,
-    issued: { "date-parts":[[ Number(m['published-print']?.['date-parts']?.[0]?.[0] || m.created?.['date-parts']?.[0]?.[0] || new Date().getFullYear() ) ]] },
-    "container-title": (m['container-title']||[])[0] || '',
+    issued: { "date-parts": [[year]] },
+    "container-title": (m['container-title'] || [])[0] || '',
     volume: m.volume, issue: m.issue, page: m.page,
-    DOI: m.DOI, URL: m.URL
+    DOI: m.DOI, URL: m.URL,
+    id: m.DOI || m.URL || m.title // keep something as id fallback
   };
 }
 
-export async function searchCrossref(query, rows = 5) {
-  const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=${rows}&select=DOI,title,author,issued,container-title,URL,volume,issue,page`;
-  const { data } = await axios.get(url);
-  const items = (data?.message?.items || []).map(toCSLJSON);
-  return items;
-}
-
-// Extract DOIs from any text (used to mine project.sources)
+// Extract DOIs from free text (used to mine uploaded Sources)
 export function extractDois(text){
   const out = new Set();
   const re = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
@@ -67,7 +67,7 @@ export function extractDois(text){
   return Array.from(out);
 }
 
-// Crossref search with optional date filters
+// Crossref search with optional date filters (single canonical definition)
 export async function searchCrossref(query, rows = 5, from = null, until = null) {
   const params = new URLSearchParams();
   params.set('query', query);
@@ -76,7 +76,7 @@ export async function searchCrossref(query, rows = 5, from = null, until = null)
   params.set('sort', 'score');
   params.set('order', 'desc');
   const filters = ['type:journal-article'];
-  if (from) filters.push(`from-pub-date:${from}`);
+  if (from)  filters.push(`from-pub-date:${from}`);
   if (until) filters.push(`until-pub-date:${until}`);
   params.set('filter', filters.join(','));
   const url = `https://api.crossref.org/works?${params.toString()}`;
