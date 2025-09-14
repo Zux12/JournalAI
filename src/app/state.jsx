@@ -24,6 +24,7 @@ const DEFAULT_PROJECT = {
   sections: {},
   figures: [],
   tables: [],
+  sources: [], // <— NEW: uploaded article PDFs after extraction/OCR
   declarations: { ethicsIRB:'', consent:'', dataAvailability:'', codeAvailability:'', conflicts:'' },
   references: { styleId:'ieee', items:[], unresolved:[] },
   settings: { humanize:'off', warnOnSkip:true }
@@ -50,7 +51,9 @@ export function ProjectProvider({ children }){
   const setMetadata = (metadata)=>update(p=>({ ...p, metadata }));
   const setPlanner = (planner)=>update(p=>({ ...p, planner }));
   const setSectionDraft = (id, draft)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), draft } } }));
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft };
+  const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW
+
+  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSources };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
