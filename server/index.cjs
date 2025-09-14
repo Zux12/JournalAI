@@ -68,7 +68,7 @@ api.post('/ai/keywords', async (req, res) => {
     const prompt = `Title: ${title}\nDiscipline: ${discipline}\nAbstract: ${abstract}\nSeed keywords: ${seedKeywords.join(', ')}\nSuggest 5–10 academically relevant keywords (comma-separated).`;
     const content = await openaiChat(
       [
-        { role: 'system', content: 'You are an academic writing assistant.' },
+        { role: 'system', content: 'You are an expert academic writer. NEVER invent citations. Do not add bracketed citations yourself; the app will insert them.' },
         { role: 'user', content: prompt }
       ],
       'gpt-4o-mini',
