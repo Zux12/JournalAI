@@ -106,28 +106,27 @@ export default function QnA(){
       // 1) Gather citations: manual + auto-detected
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
-      let tokens = Array.from(new Set([...manual, ...detected]));
 
-      // 2) If none provided/detected, auto-suggest via Crossref using a query from notes+title+section
+      const tokens = Array.from(new Set([...manual, ...detected]));
       const newRefs = [];
-      if (tokens.length === 0) {
+
+      // Resolve provided/detected tokens (if any)
+      for (const t of tokens) {
+        try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
+      }
+
+      // Always add top Crossref suggestions as well (merge will dedupe)
+      try {
         const q = [
           project.metadata.title || '',
           project.metadata.discipline || '',
           current.name || '',
           String(notes).slice(0, 160)
         ].filter(Boolean).join(' ');
-        try {
-          const suggested = await searchCrossref(q, 3); // take top 3
-          newRefs.push(...suggested);
-        } catch (e) {
-          console.warn('Crossref search failed', e);
-        }
-      } else {
-        // Resolve provided/detected tokens
-        for (const t of tokens) {
-          try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
-        }
+        const suggested = await searchCrossref(q, 3);
+        newRefs.push(...suggested);
+      } catch (e) {
+        console.warn('Crossref search failed', e);
       }
 
       // 3) Merge references and capture keys for in-text formatting
