@@ -28,7 +28,8 @@
     "react-router-dom": "^6.26.2",
     "tesseract.js": "^5.0.5",
     "@citation-js/core": "^0.6.9",
-    "@citation-js/plugin-csl": "^0.6.9"
+    "@citation-js/plugin-csl": "^0.6.9",
+    "docx": "^8.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
