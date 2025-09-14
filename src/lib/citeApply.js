@@ -1,6 +1,6 @@
 import { ensureRefIds, formatInText } from './refFormat.js';
 
-export function applyCitations(text, styleId, refs) {
+export function applyCitations(text, styleId, refs, numberMap = null) {
   const all = ensureRefIds(refs?.items || []);
   const keyset = new Set(all.map(it => it._key));
   const used = new Set();
@@ -11,9 +11,10 @@ export function applyCitations(text, styleId, refs) {
       .map(s => s.trim().toLowerCase())
       .filter(k => keyset.has(k));
     keys.forEach(k => used.add(k));
-    const inText = formatInText(styleId, refs, keys);
+    const inText = formatInText(styleId, refs, keys, numberMap);
     return inText || '';
   });
 
   return { text: out, citedKeys: Array.from(used) };
 }
+
