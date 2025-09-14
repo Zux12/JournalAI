@@ -49,7 +49,7 @@ function toAIRefStub(entry) {
 export default function QnA(){
   const nav = useNavigate();
   const { sectionId } = useParams();
-  const { project, setSectionDraft, setSectionNotes, setSectionCitedKeys, update } = useProjectState();
+  const { project, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, update } = useProjectState();
 
   const all = project.planner.sections.filter(s => s.id !== 'refs');
   const active = all.filter(s => !s.skipped);
@@ -172,8 +172,9 @@ export default function QnA(){
 
       // 5) Convert stray (Author, Year) → markers, then apply style-aware citations
       const sanitized = convertAuthorYearToMarkers(aiText, refsAfter);
-      const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
-      setSectionDraft(id, finalText);
+ setSectionDraftRaw(id, sanitized.text); // keep markers for export renumbering
+ const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
+ setSectionDraft(id, finalText);
       setSectionCitedKeys(id, citedKeys);
 
     } finally { setBusy(false); }
