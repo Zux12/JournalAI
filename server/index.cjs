@@ -84,22 +84,59 @@ api.post('/ai/keywords', async (req, res) => {
 
 api.post('/ai/draft', async (req, res) => {
   try {
-    const { sectionName = 'Section', tone = 'neutral', styleId = 'ieee', context = {} } = req.body || {};
-    const prompt = `Write the "${sectionName}" of a journal article in ${tone} academic tone, following ${styleId} in-text citation conventions (do not output the references list). Use this context:\n${JSON.stringify(context, null, 2)}`;
+    const {
+      sectionName = 'Section',
+      tone = 'neutral',
+      styleId = 'ieee',
+      context = {}
+    } = req.body || {};
+
+    // We pass the model a compact list of refs: [{key, author, year, title}]
+    const refsForAI = Array.isArray(context.refs) ? context.refs : [];
+    const density = context.citationDensity === 'dense' ? 'dense' : 'normal';
+
+    const systemMsg =
+      'You are an expert academic writer. NEVER invent citations. ' +
+      'Use ONLY the provided refs list (with their keys). ' +
+      'When a sentence draws on a source, append a marker like {{cite:key1,key2}} ' +
+      '(do NOT format the citation yourself). ' +
+      'If uncertain, omit the marker. Keep prose human and academic.';
+
+    const userMsg =
+`Write the "${sectionName}" section in a ${tone} academic tone.
+Style family: ${styleId} (for info only; the app will format).
+Citation density: ${density} (dense = cite most substantive sentences; normal = 1–2 per paragraph).
+Context JSON:
+${JSON.stringify({
+  title: context.title,
+  discipline: context.discipline,
+  keywords: context.keywords,
+  notes: context.sectionNotes,
+  refs: refsForAI   // [{ key, author, year, title }]
+}, null, 2)}
+Guidelines:
+- Use the refs keys in {{cite:...}} right after the sentence(s) they support.
+- Prefer 1–2 refs per sentence for "dense", fewer for "normal".
+- Do not fabricate new works or keys.
+- No reference list; just prose with markers.
+`;
+
     const content = await openaiChat(
       [
-        { role: 'system', content: 'You are an expert academic writer who drafts clean, human-sounding prose.' },
-        { role: 'user', content: prompt }
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: userMsg }
       ],
       'gpt-4o-mini',
       0.5
     );
+
     res.json({ text: content });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'AI draft failed' });
   }
 });
+
 
 api.post('/ai/humanize', async (req, res) => {
   try {
