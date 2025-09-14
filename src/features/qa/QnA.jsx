@@ -56,7 +56,7 @@ async function resolveTokenToCSL(token) {
 export default function QnA(){
   const nav = useNavigate();
   const { sectionId } = useParams();
-  const { project, setSectionDraft, setSectionNotes, update } = useProjectState();
+  const { project, setSectionDraft, setSectionNotes, setSectionCitedKeys, update } = useProjectState();
 
   const all = project.planner.sections.filter(s => s.id !== 'refs');
   const active = all.filter(s => !s.skipped);
