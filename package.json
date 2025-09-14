@@ -11,7 +11,7 @@
     "heroku-postbuild": "npm run build"
   },
     "engines": {
-    "node": ">=18.17 <23"
+    "node": "22.X"
   },
 
   "dependencies": {
