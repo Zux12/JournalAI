@@ -41,15 +41,17 @@ export function mergeReferences(curRefs, newItems) {
   return { ...(curRefs || { styleId: 'ieee', items: [], unresolved: [] }), items };
 }
 
-export function formatInText(styleId, refs, keys=[]) {
+export function formatInText(styleId, refs, keys = [], numberMap = null) {
   const items = ensureRefIds(refs?.items || []);
   if (!keys.length || !items.length) return '';
 
   if (NUMERIC_STYLES.has(styleId)) {
     // Map keys to numbers based on first-appearance order
-    const order = new Map(items.map((it, i) => [it._key, i + 1]));
+     const order = numberMap
+      ? numberMap // Map<keyLower, number>
+      : new Map(items.map((it, i) => [it._key, i + 1]));
     const nums = keys
-      .map(k => order.get(k.toLowerCase?.() || k) ?? order.get(String(k).toLowerCase()))
+      .map(k => order.get((k.toLowerCase?.() || String(k).toLowerCase())) )
       .filter(n => typeof n === 'number')
       .sort((a,b)=>a-b);
     if (!nums.length) return '';
@@ -161,5 +163,33 @@ export function formatBibliographyCitedOnly(styleId, refs, citedKeys = []) {
     const doi = it.DOI ? ` https://doi.org/${it.DOI}` : (it.URL ? ` ${it.URL}` : '');
     return `${authors} (${year}). ${it.title}. ${container}${vol}${issue}${pages}.${doi}`;
   });
+  return lines.join('\n');
+}
+
+export function formatBibliographyWithMap(styleId, refs, numberMap) {
+  const all = ensureRefIds(refs?.items || []);
+  if (!all.length || !numberMap || numberMap.size === 0) return '';
+  if (!NUMERIC_STYLES.has(styleId)) return ''; // only applies to numeric
+
+  const byKey = new Map(all.map(it => [it._key, it]));
+  const seq = Array.from(numberMap.entries())
+    .map(([k, n]) => ({ key: String(k), n }))
+    .sort((a,b)=>a.n - b.n);
+
+  const lines = [];
+  for (const { key, n } of seq) {
+    const it = byKey.get(String(key).toLowerCase());
+    if (!it) continue;
+    const authors = (it.author || [])
+      .map(a => a.family ? `${a.family} ${a.given ? a.given[0]+'.' : ''}` : a.literal || '')
+      .filter(Boolean).join(', ');
+    const year = pubYear(it);
+    const container = it['container-title'] || '';
+    const vol = it.volume ? ` ${it.volume}` : '';
+    const issue = it.issue ? `(${it.issue})` : '';
+    const pages = it.page ? `:${it.page}` : '';
+    const doi = it.DOI ? ` doi:${it.DOI}` : (it.URL ? ` ${it.URL}` : '');
+    lines.push(`[${n}] ${authors}. ${it.title}. ${container}${vol}${issue}${pages} (${year}).${doi}`);
+  }
   return lines.join('\n');
 }
