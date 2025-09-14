@@ -1,23 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
   server: { port: 3000 },
   resolve: {
-    alias: {
-      react: path.resolve(__dirname, 'node_modules/react'),
-      'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
-    },
-    dedupe: ['react', 'react-dom']
+    // Ensure one React runtime in the bundle
+    dedupe: ['react', 'react-dom', 'react/jsx-runtime'],
   },
   optimizeDeps: {
-    // Don't prebundle these into a separate graph that could pull a second React
+    // Keep React in a single pre-bundle; avoid pulling docx/CSL into the pre-bundle graph
+    include: ['react', 'react-dom'],
     exclude: ['docx', '@citation-js/core', '@citation-js/plugin-csl'],
-    include: ['react', 'react-dom']
   },
   build: {
-    outDir: 'dist'
-  }
+    outDir: 'dist',
+  },
 });
