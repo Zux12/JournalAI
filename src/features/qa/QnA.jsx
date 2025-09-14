@@ -16,17 +16,13 @@ function parseCitationTokens(raw) {
 function detectIdsFromText(str){
   const text = String(str || '');
   const tokens = new Set();
-  // DOI
   const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
   let m;
   while ((m = doiRe.exec(text))) tokens.add(m[0].replace(/[).,;]+$/, ''));
-  // PMID
   const pmidTagRe = /\bpmid[:\s]*([0-9]{6,9})\b/gi;
   while ((m = pmidTagRe.exec(text))) tokens.add(`pmid:${m[1]}`);
-  // arXiv modern
   const arxivRe = /\barxiv[:\s]*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/gi;
   while ((m = arxivRe.exec(text))) tokens.add(`arxiv:${m[1]}`);
-  // arXiv legacy
   const arxivOld = /\barxiv[:\s]*([a-z\-]+(?:\.[a-z\-]+)?\/[0-9]{7}(?:v\d+)?)\b/gi;
   while ((m = arxivOld.exec(text))) tokens.add(`arxiv:${m[1]}`);
   return Array.from(tokens);
@@ -74,10 +70,12 @@ export default function QnA(){
   }
 
   const id = current.id;
-  const [tone, setTone]   = React.useState((project.sections[id]?.tone)  || 'neutral');
-  const [notes, setNotes] = React.useState((project.sections[id]?.notes) || '');
-  const [cites, setCites] = React.useState((project.sections[id]?.cites) || '');
-  const [density, setDensity] = React.useState('dense'); // default dense
+  const [tone, setTone]         = React.useState((project.sections[id]?.tone)  || 'neutral');
+  const [notes, setNotes]       = React.useState((project.sections[id]?.notes) || '');
+  const [cites, setCites]       = React.useState((project.sections[id]?.cites) || '');
+  const [density, setDensity]   = React.useState('dense');         // normal|dense|extra|extreme
+  const [lengthPreset, setLen]  = React.useState('extended');      // brief|standard|extended|comprehensive
+  const [paragraphs, setParas]  = React.useState(4);
   const draft = project.sections[id]?.draft || '';
   const [busy, setBusy] = React.useState(false);
 
@@ -94,7 +92,6 @@ export default function QnA(){
     update(p => ({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), cites: v } } }));
   }
 
-  // Prev/Next among active
   const idx = active.findIndex(s => s.id === current.id);
   const prevId = idx > 0 ? active[idx - 1].id : null;
   const nextId = idx >= 0 && idx < active.length - 1 ? active[idx + 1].id : null;
@@ -102,7 +99,16 @@ export default function QnA(){
   async function draftWithAI(){
     setBusy(true);
     try{
-      // 1) Gather references (manual + detected + mined from Sources + Crossref diverse)
+      // Density knobs (more refs for higher density)
+      const cfgByDensity = {
+        normal:  { rowsRecent:5,  rowsOld:3,  aiCap:10, sourceCap:8  },
+        dense:   { rowsRecent:8,  rowsOld:5,  aiCap:12, sourceCap:10 },
+        extra:   { rowsRecent:12, rowsOld:8,  aiCap:16, sourceCap:14 },
+        extreme: { rowsRecent:16, rowsOld:12, aiCap:20, sourceCap:20 }
+      };
+      const cfg = cfgByDensity[density] || cfgByDensity.dense;
+
+      // 1) Gather references: manual + detected + mined from Sources + Crossref diverse
       const manual = parseCitationTokens(cites);
       const detected = detectIdsFromText(notes);
       const tokens = Array.from(new Set([...manual, ...detected]));
@@ -111,13 +117,14 @@ export default function QnA(){
 
       const sourceDois = new Set();
       (project.sources || []).forEach(s => extractDois(s.text).forEach(d => sourceDois.add(d)));
-      for (const d of Array.from(sourceDois).slice(0, 10)) {
+      for (const d of Array.from(sourceDois).slice(0, cfg.sourceCap)) {
         try { newRefs.push(await resolveTokenToCSL(d)); } catch {}
       }
 
       try {
-        const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0,160)].filter(Boolean).join(' ');
-        const suggested = await searchCrossrefDiverse(q, 5, 3);
+        const q = [project.metadata.title||'', project.metadata.discipline||'', current.name||'', String(notes).slice(0,160)]
+          .filter(Boolean).join(' ');
+        const suggested = await searchCrossrefDiverse(q, cfg.rowsRecent, cfg.rowsOld);
         newRefs.push(...suggested);
       } catch {}
 
@@ -129,11 +136,11 @@ export default function QnA(){
         return { ...p, references: merged };
       });
 
-      // 3) Build compact, diverse list for model
+      // 3) Build compact, diverse list (distinct first-author|year), more capacity for higher density
       const allItems = ensureRefIds(refsAfter.items || []);
-      const recentBatch = allItems.slice(-24);
+      const recentBatch = allItems.slice(-32);
       const uniq = [];
-      const seen = new Set(); // firstAuthor|year
+      const seen = new Set();
       for (const it of recentBatch) {
         const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author').toLowerCase();
         const yr = String(it?.issued?.['date-parts']?.[0]?.[0] || it?.issued?.year || '');
@@ -141,11 +148,11 @@ export default function QnA(){
         if (seen.has(k)) continue;
         seen.add(k);
         uniq.push(it);
-        if (uniq.length >= 12) break;
+        if (uniq.length >= cfg.aiCap) break;
       }
       const aiRefs = uniq.map(toAIRefStub);
 
-      // 4) Ask AI to draft with {{cite:key}} markers
+      // 4) Ask AI to draft with markers and with length/density controls
       const { data } = await axios.post('/api/ai/draft', {
         sectionName: current.name,
         tone,
@@ -156,12 +163,14 @@ export default function QnA(){
           keywords: project.metadata.keywords,
           sectionNotes: notes,
           refs: aiRefs,
-          citationDensity: density
+          citationDensity: density,
+          lengthPreset,
+          paragraphs
         }
       });
       let aiText = data.text || '';
 
-      // 5) Convert any stray (Author, Year) → markers, then apply style-aware citations
+      // 5) Convert stray (Author, Year) → markers, then apply style-aware citations
       const sanitized = convertAuthorYearToMarkers(aiText, refsAfter);
       const { text: finalText, citedKeys } = applyCitations(sanitized.text, project.styleId, refsAfter);
       setSectionDraft(id, finalText);
@@ -170,31 +179,27 @@ export default function QnA(){
     } finally { setBusy(false); }
   }
 
-  // --- Insert citation at cursor (manual) ---
+  // Manual insert at cursor
   const draftRef = React.useRef(null);
   const [showInsert, setShowInsert] = React.useState(false);
   const [selectedKeys, setSelectedKeys] = React.useState([]);
   const items = ensureRefIds(project.references?.items || []);
-  function toggleKey(k){
-    setSelectedKeys(prev => prev.includes(k) ? prev.filter(x=>x!==k) : [...prev, k]);
-  }
+  function toggleKey(k){ setSelectedKeys(prev => prev.includes(k) ? prev.filter(x=>x!==k) : [...prev, k]); }
   function insertAtCursor(textarea, snippet){
     const el = textarea;
     const start = el.selectionStart ?? el.value.length;
     const end   = el.selectionEnd ?? el.value.length;
     const before = el.value.slice(0, start);
     const after  = el.value.slice(end);
-    const next = before + snippet + after;
-    el.value = next;
-    el.setSelectionRange(start + snippet.length, start + snippet.length);
-    return next;
+    el.value = before + snippet + after;
+    const caret = start + snippet.length;
+    el.setSelectionRange(caret, caret);
+    return el.value;
   }
   function insertSelectedCitations(){
     if (!selectedKeys.length) return;
-    // Format in-text per style and insert
     const inText = formatInText(project.styleId, project.references || {}, selectedKeys);
-    const el = draftRef.current;
-    const nextVal = insertAtCursor(el, (inText ? ` ${inText}` : ''));
+    const nextVal = insertAtCursor(draftRef.current, (inText ? ` ${inText}` : ''));
     setSectionDraft(id, nextVal);
     setSectionCitedKeys(id, Array.from(new Set([...(project.sections[id]?.citedKeys || []), ...selectedKeys.map(k=>k.toLowerCase())])));
     setShowInsert(false);
@@ -207,7 +212,6 @@ export default function QnA(){
     URL.revokeObjectURL(url);
   }
 
-  // Map cited keys -> chips
   const citedKeys = project.sections[id]?.citedKeys || [];
   const byKey = new Map(items.map(it => [it._key, it]));
   const chips = citedKeys.map(k => byKey.get(String(k).toLowerCase())).filter(Boolean);
@@ -237,7 +241,7 @@ export default function QnA(){
           <input className="input" value={cites} onChange={e=>onCitesChange(e.target.value)} placeholder="e.g., 10.1038/nmeth.4823, pmid:12345678, arxiv:2401.01234"/>
         </div>
 
-        <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr 1fr auto auto', gap:8}}>
+        <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr 1fr 1fr auto auto', gap:8}}>
           <div>
             <label>Tone</label>
             <select className="input" value={tone} onChange={e=>setTone(e.target.value)}>
@@ -250,7 +254,18 @@ export default function QnA(){
             <label>Citation density</label>
             <select className="input" value={density} onChange={e=>setDensity(e.target.value)}>
               <option value="normal">Normal</option>
-              <option value="dense">Dense (more citations)</option>
+              <option value="dense">Dense</option>
+              <option value="extra">Extra Dense</option>
+              <option value="extreme">Extreme</option>
+            </select>
+          </div>
+          <div>
+            <label>Section length</label>
+            <select className="input" value={lengthPreset} onChange={e=>setLen(e.target.value)}>
+              <option value="brief">Brief (150–250)</option>
+              <option value="standard">Standard (300–500)</option>
+              <option value="extended">Extended (700–900)</option>
+              <option value="comprehensive">Comprehensive (1200–1500)</option>
             </select>
           </div>
           <button className="btn" onClick={draftWithAI} disabled={busy}>{busy ? 'Drafting…' : 'Draft with AI'}</button>
@@ -258,10 +273,9 @@ export default function QnA(){
         </div>
 
         <div className="warn" style={{marginTop:12}}>
-          The AI inserts inline citations where sources are used. You can also manually insert citations at the cursor.
+          AI will write to your chosen length and density, inserting inline citations where sources are used.
         </div>
 
-        {/* Manual insert citations */}
         <div style={{marginTop:12}}>
           <button onClick={()=>setShowInsert(v=>!v)}>➕ Insert citation at cursor</button>
           {showInsert && (
@@ -274,7 +288,7 @@ export default function QnA(){
                   const label = `${fam} ${yr} — ${String(it.title||'').slice(0,80)}`;
                   return (
                     <label key={it._key} style={{display:'block', padding:'4px 0'}}>
-                      <input type="checkbox" checked={selectedKeys.includes(it._key)} onChange={()=>toggleKey(it._key)} />
+                      <input type="checkbox" checked={selectedKeys.includes(it._key)} onChange={()=>setSelectedKeys(prev => prev.includes(it._key) ? prev.filter(x=>x!==it._key) : [...prev, it._key])} />
                       <span style={{marginLeft:8}}>{label}</span>
                     </label>
                   );
@@ -292,14 +306,15 @@ export default function QnA(){
       <div className="card">
         <h3>Live Draft</h3>
         <textarea ref={draftRef} className="input" rows="18" value={draft} onChange={e=>setSectionDraft(id, e.target.value)} />
-        {/* Refs used in this section */}
         <div style={{marginTop:8}}>
-          {chips.length>0 && <div style={{fontSize:12, color:'#667', marginBottom:6}}>References used in this section:</div>}
+          {(project.sections[id]?.citedKeys || []).length>0 && <div style={{fontSize:12, color:'#667', marginBottom:6}}>References used in this section:</div>}
           <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
-            {chips.map((it,i)=>{
+            {(project.sections[id]?.citedKeys || []).map(k=>{
+              const it = items.find(x => x._key === k);
+              if(!it) return null;
               const fam = (it.author?.[0]?.family || it.author?.[0]?.literal || 'Author');
               const yr = it?.issued?.['date-parts']?.[0]?.[0] || '';
-              return <span key={i} className="badge">{fam} {yr}</span>;
+              return <span key={k} className="badge">{fam} {yr}</span>;
             })}
           </div>
         </div>
