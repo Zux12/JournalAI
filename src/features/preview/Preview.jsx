@@ -281,19 +281,21 @@ export default function Preview(){
         {preview}
       </div>
 
-      <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
-        <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
-        <label style={{marginLeft:8}}>
-          Humanize:
-          <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
-            <option value="light">Light</option>
-            <option value="medium">Medium</option>
-          </select>
-        </label>
-        <button onClick={humanizeAndDownload} disabled={hzBusy}>
-          {hzBusy ? 'Humanizing…' : 'Humanize & Download'}
-        </button>
-      </div>
+     <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center'}}>
+  <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
+  <label style={{marginLeft:8}}>
+    Humanize:
+    <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
+      <option value="light">Light</option>
+      <option value="medium">Medium</option>
+    </select>
+  </label>
+  <button onClick={humanizeAndDownload} disabled={hzBusy}>
+    {hzBusy ? 'Humanizing…' : 'Humanize & Download'}
+  </button>
+  <button onClick={exportDocx}>Download DOCX</button>
+</div>
+
 
       <div style={{fontSize:12, color:'#667', marginTop:6}}>
         Tip: Fill Authors/Affiliations/Emails in <em>Metadata</em>. Keywords appear under Abstract automatically.
