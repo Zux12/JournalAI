@@ -11,12 +11,60 @@ const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 export default function Preview(){
   const { project } = useProjectState();
   const [renumber, setRenumber] = React.useState(true);
-  const [useCSL, setUseCSL] = React.useState(true);   // NEW: exact CSL bibliography
+  const [useCSL, setUseCSL] = React.useState(true);
   const [hzBusy, setHzBusy] = React.useState(false);
   const [hzMode, setHzMode] = React.useState('light');
   const order = project.planner.sections || [];
 
-  // Build contiguous numeric numbering map from raw cite markers
+  // ------- Front matter helpers -------
+  function buildFrontMatter(){
+    const md = project.metadata || {};
+    const title = md.title || 'Untitled Manuscript';
+
+    // Collect affiliations and map to [1], [2], ...
+    const affils = [];
+    const affIndex = new Map(); // aff -> number
+    (md.authors || []).forEach(a => {
+      const aff = (a.affiliation || '').trim();
+      if (aff && !affIndex.has(aff)) {
+        affIndex.set(aff, affils.length + 1);
+        affils.push(aff);
+      }
+    });
+
+    // Authors line: Name [n][m]*  (asterisk for corresponding)
+    const authorsLine = (md.authors || []).length
+      ? 'Authors: ' + md.authors.map(a => {
+          const nums = [];
+          const aff = (a.affiliation || '').trim();
+          if (aff && affIndex.has(aff)) nums.push(affIndex.get(aff));
+          const tag = nums.length ? ` [${nums.join(',')}]` : '';
+          const star = a.isCorresponding ? '*' : '';
+          return `${a.name || 'Author'}${tag}${star}`;
+        }).join(', ')
+      : '';
+
+    const affilBlock = affils.length
+      ? affils.map((aff,i)=>`[${i+1}] ${aff}`).join('\n')
+      : '';
+
+    // Corresponding author line
+    const corr = (md.authors || []).find(a => a.isCorresponding) || (md.authors || [])[0];
+    const corrLine = corr && corr.email
+      ? `Correspondence: ${corr.name || 'Corresponding Author'} <${corr.email}>`
+      : '';
+
+    // Title as H1 so DOCX exporter renders heading
+    const parts = [
+      `# ${title}`,
+      authorsLine,
+      affilBlock,
+      corrLine
+    ].filter(Boolean);
+
+    return parts.join('\n') + '\n';
+  }
+
   function collectNumberMap() {
     const map = new Map(); let n = 1;
     for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
@@ -30,7 +78,6 @@ export default function Preview(){
     return map;
   }
 
-  // Ordered cited keys by first appearance (for author-date CSL)
   function collectCitedKeysOrder() {
     const seen = new Set();
     const orderKeys = [];
@@ -43,7 +90,6 @@ export default function Preview(){
       }
     }
     if (!orderKeys.length) {
-      // fallback to union of section.citedKeys
       Object.values(project.sections || {}).forEach(sec => (sec?.citedKeys || []).forEach(k => {
         if (!seen.has(k)) { seen.add(k); orderKeys.push(String(k).toLowerCase()); }
       }));
@@ -51,12 +97,10 @@ export default function Preview(){
     return orderKeys;
   }
 
-  // Build sections text (+fig/tab tokens) and references block(s)
   async function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
     const numMap  = (renumber && numeric) ? collectNumberMap() : null;
 
-    // Figure/Table numbering
     const { figMap, tabMap } = collectFigureTableMaps(project.sections, project.figures, project.tables);
 
     const pieces = [];
@@ -67,11 +111,16 @@ export default function Preview(){
       } else {
         txt = project.sections[s.id]?.draft || '';
       }
+      // Add Keywords after Abstract
+      if (/^abstract$/i.test(s.name) && (project.metadata?.keywords || []).length) {
+        const keyline = `\n\nKeywords: ${(project.metadata.keywords || []).join('; ')}`;
+        txt = (txt || '') + keyline;
+      }
       txt = applyFigTabTokens(txt, figMap, tabMap);
       pieces.push({ title: s.name, text: txt });
     }
 
-    // Simple formatter (existing)
+    // Simple formatter as fallback
     let refsSimple = '';
     if (numeric && numMap && numMap.size > 0) {
       refsSimple = formatBibliographyWithMap(project.styleId, project.references || {}, numMap);
@@ -82,13 +131,12 @@ export default function Preview(){
       refsSimple = formatBibliographyCitedOnly(project.styleId, project.references || {}, citedKeys);
     }
 
-    // Exact CSL bibliography (optional)
+    // CSL exact bibliography (optional)
     let refsCSL = '';
     try {
       if (useCSL) {
         const all = (project.references?.items || []);
         if (numeric && numMap && numMap.size > 0) {
-          // numeric: order items by contiguous number map
           const byKey = new Map(all.map(it => {
             const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
             return [key, it];
@@ -99,36 +147,29 @@ export default function Preview(){
             .filter(Boolean);
           if (ordered.length) {
             const biblio = await formatCSLBibliography(project.styleId, ordered);
-            // prefix with [n]
-            refsCSL = biblio
-              .split(/\r?\n/)
-              .map((line, i) => `[${i+1}] ${line}`)
-              .join('\n');
+            refsCSL = biblio.split(/\r?\n/).map((line, i) => `[${i+1}] ${line}`).join('\n');
           }
         } else {
-          // author-date: cited-only in first-appearance order
           const orderKeys = collectCitedKeysOrder();
           const byKey = new Map(all.map(it => {
             const key = (it._key || it.id || it.DOI || it.title || '').toLowerCase();
             return [key, it];
           }));
           const ordered = orderKeys.map(k => byKey.get(k)).filter(Boolean);
-          if (ordered.length) {
-            refsCSL = await formatCSLBibliography(project.styleId, ordered);
-          }
+          if (ordered.length) refsCSL = await formatCSLBibliography(project.styleId, ordered);
         }
       }
     } catch (e) {
       console.warn('CSL bibliography failed:', e?.message || e);
     }
 
-    // Lists of Figures/Tables
     const { listOfFigures, listOfTables } = buildLists(figMap, tabMap, project.figures, project.tables);
 
     return { pieces, refsSimple, refsCSL, listOfFigures, listOfTables };
   }
 
   async function buildManuscriptText(){
+    const fm = buildFrontMatter();
     const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
     const body = pieces.map(p => `# ${p.title}\n\n${p.text}`).join('\n\n');
 
@@ -138,7 +179,7 @@ export default function Preview(){
     const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
     const refs = refsText?.trim() ? `\n\n# References\n\n${refsText}` : '';
 
-    return body + lof + lot + refs;
+    return fm + '\n' + body + lof + lot + refs;
   }
 
   function exportAll(){
@@ -151,12 +192,12 @@ export default function Preview(){
     })();
   }
 
-  // Chunked humanize per section (avoids router timeout)
   async function humanizeAndDownload(){
     setHzBusy(true);
     try{
+      const fm = buildFrontMatter();
       const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
-      const out = [];
+      const out = [fm];
 
       for (const p of pieces) {
         const chunk = `# ${p.title}\n\n${p.text}`;
@@ -183,7 +224,7 @@ export default function Preview(){
     }
   }
 
-  const [preview, setPreview] = React.useState(''); // async preview text
+  const [preview, setPreview] = React.useState('');
   React.useEffect(() => {
     let ok = true;
     (async () => {
@@ -233,7 +274,7 @@ export default function Preview(){
       </div>
 
       <div style={{fontSize:12, color:'#667', marginTop:6}}>
-        Tip: Put CSL files in <code>/public/csl/</code>. If a style is missing, the app falls back to the simple formatter.
+        Tip: Fill Authors/Affiliations/Emails in <em>Metadata</em>. Keywords appear under Abstract automatically.
       </div>
     </div>
   );
