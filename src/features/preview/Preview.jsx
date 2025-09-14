@@ -7,6 +7,7 @@ import { collectFigureTableMaps, applyFigTabTokens, buildLists } from '../../lib
 import { formatCSLBibliography } from '../../lib/csl.js';
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
+const [docxBusy, setDocxBusy] = React.useState(false);
 
 export default function Preview(){
   const { project } = useProjectState();
@@ -97,6 +98,61 @@ export default function Preview(){
     return orderKeys;
   }
 
+  async function exportDocx(humanize = false){
+  setDocxBusy(true);
+  try{
+    if (!humanize) {
+      // non-humanized DOCX (uses your renumber/CSL/lists/front matter)
+      const text = await buildManuscriptText();
+      const { data } = await axios.post(
+        '/api/export/docx',
+        { content: text, filename: 'manuscript.docx' },
+        { responseType: 'arraybuffer' }
+      );
+      const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'manuscript.docx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      return;
+    }
+
+    // humanized → DOCX (chunk each section to avoid timeouts)
+    const fm = buildFrontMatter();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+    const out = [fm];
+
+    for (const p of pieces) {
+      const chunk = `# ${p.title}\n\n${p.text}`;
+      const { data } = await axios.post('/api/ai/humanize', { text: chunk, degree: hzMode });
+      out.push((data && typeof data.text === 'string') ? data.text : chunk);
+    }
+
+    const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
+    if (listOfFigures?.trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if (listOfTables?.trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if (refsText?.trim())      out.push(`\n# References\n\n${refsText}`);
+
+    const finalText = out.join('\n\n');
+    const { data } = await axios.post(
+      '/api/export/docx',
+      { content: finalText, filename: `manuscript_humanized_${hzMode}.docx` },
+      { responseType: 'arraybuffer' }
+    );
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${hzMode}.docx`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error('DOCX export failed:', err);
+    alert(`DOCX export failed: ${err?.response?.data?.error || err.message}`);
+  } finally {
+    setDocxBusy(false);
+  }
+}
+
+  
   async function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
     const numMap  = (renumber && numeric) ? collectNumberMap() : null;
@@ -293,7 +349,11 @@ export default function Preview(){
   <button onClick={humanizeAndDownload} disabled={hzBusy}>
     {hzBusy ? 'Humanizing…' : 'Humanize & Download'}
   </button>
-  <button onClick={exportDocx}>Download DOCX</button>
+  <button onClick={()=>exportDocx(false)} disabled={docxBusy}>Download DOCX</button>
+<button onClick={()=>exportDocx(true)}  disabled={docxBusy}>
+  {docxBusy ? 'Building DOCX…' : 'Humanize & Download DOCX'}
+</button>
+
 </div>
 
 
