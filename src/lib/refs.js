@@ -49,3 +49,10 @@ function toCSLJSON(m){
     DOI: m.DOI, URL: m.URL
   };
 }
+
+export async function searchCrossref(query, rows = 5) {
+  const url = `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=${rows}&select=DOI,title,author,issued,container-title,URL,volume,issue,page`;
+  const { data } = await axios.get(url);
+  const items = (data?.message?.items || []).map(toCSLJSON);
+  return items;
+}
