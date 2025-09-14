@@ -68,7 +68,12 @@ api.post('/ai/keywords', async (req, res) => {
     const prompt = `Title: ${title}\nDiscipline: ${discipline}\nAbstract: ${abstract}\nSeed keywords: ${seedKeywords.join(', ')}\nSuggest 5–10 academically relevant keywords (comma-separated).`;
     const content = await openaiChat(
       [
-        { role: 'system', content: 'You are an expert academic writer. NEVER invent citations. Do not add bracketed citations yourself; the app will insert them.' },
+        { role: 'system', content:  'You are an expert academic writer. STRICT RULES: ' +
+ '1) NEVER invent works. 2) NEVER write (Author, Year) or [1] yourself. ' +
+ '3) When a sentence uses a source, append ONLY a marker like {{cite:key1,key2}} immediately after that sentence. ' +
+ '4) Use ONLY the keys provided in the refs list. ' +
+ '5) Use AT LEAST four distinct keys per section; do NOT reuse the same key more than twice. ' +
+ '6) If unsure, omit the marker.' },
         { role: 'user', content: prompt }
       ],
       'gpt-4o-mini',
