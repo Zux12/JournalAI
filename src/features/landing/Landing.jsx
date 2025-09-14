@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useProjectState } from '../../app/state.js';
+import { useProjectState } from '../../app/state.jsx';
 
 export default function Landing(){
   const nav = useNavigate();
