@@ -198,3 +198,33 @@ process.on('uncaughtException', e => { console.error('UNCAUGHT', e); process.exi
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Server on :${PORT}`));
+
+
+// ---summarize ---
+api.post('/ai/summarize', async (req, res) => {
+  try {
+    const { text = '', maxWords = 220, focus = '' } = req.body || {};
+    if (!text || text.trim().length < 40) return res.json({ summary: '' });
+
+    const systemMsg =
+      'You are a domain expert summarizer. Extract the most decision-useful facts as tight bullets. Prefer concrete numbers, units, and named entities. No fluff.';
+
+    const userMsg =
+`Summarize the following into 5–10 bullet points (max ~${maxWords} words total).
+If there are quantitative results, keep the numbers and units.
+${focus ? `Focus on: ${focus}\n` : ''}
+Text:
+${text.slice(0, 8000)}
+`;
+
+    const out = await openaiChat(
+      [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }],
+      'gpt-4o-mini',
+      0.3
+    );
+    res.json({ summary: out });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'AI summarize failed' });
+  }
+});
