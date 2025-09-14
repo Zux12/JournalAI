@@ -1,21 +1,29 @@
 import React from 'react';
 import { useProjectState } from '../../app/state.jsx';
+import { formatBibliography } from '../../lib/refFormat.js';
 
 export default function Preview(){
   const { project } = useProjectState();
-  const order = project.planner.sections;
+  const order = project.planner.sections || [];
 
   function sectionText(s){
-    return project.sections[s.id]?.draft || (s.id==='refs' ? renderRefs() : '');
+    if (s.id === 'refs') return renderRefs();
+    return project.sections[s.id]?.draft || '';
   }
+
   function renderRefs(){
-    const { formatBibliography } = require('../../lib/refFormat.js');
-    return formatBibliography(project.styleId, project.references || {});
+    const out = formatBibliography(project.styleId, project.references || {});
+    return out || '— No references added yet —';
   }
+
   function exportAll(){
-    const text = order.filter(s=>!s.skipped).map(s=>`# ${s.name}\n\n${sectionText(s)}`).join('\n\n');
+    const text = order
+      .filter(s=>!s.skipped)
+      .map(s=>`# ${s.name}\n\n${sectionText(s)}`)
+      .join('\n\n');
     download('manuscript.txt', text);
   }
+
   function download(name, text){
     const blob = new Blob([text], {type:'text/plain'});
     const url = URL.createObjectURL(blob);
