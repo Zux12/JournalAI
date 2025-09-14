@@ -6,22 +6,53 @@ import { fetchByDOI, fetchByPMID, fetchByArXiv } from '../../lib/refs.js';
 import { mergeReferences, formatInText } from '../../lib/refFormat.js';
 
 function parseCitationTokens(raw) {
-  // Accept comma/space/semicolon separated; allow bare DOI, "doi:...", pmid:123, arxiv:2301.12345
   const t = String(raw || '').trim();
   if (!t) return [];
   return t.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
 }
+
+// NEW: auto-detect DOIs / PMIDs / arXiv IDs inside free text
+function detectIdsFromText(str){
+  const text = String(str || '');
+  const tokens = new Set();
+
+  // DOI (robust)
+  const doiRe = /\b10\.\d{4,9}\/[^\s"'<>()]+/gi;
+  let m;
+  while ((m = doiRe.exec(text))) {
+    tokens.add(m[0].replace(/[).,;]+$/, ''));
+  }
+
+  // PMID (pmid:123 or PMID 12345678)
+  const pmidTagRe = /\bpmid[:\s]*([0-9]{6,9})\b/gi;
+  while ((m = pmidTagRe.exec(text))) tokens.add(`pmid:${m[1]}`);
+
+  // arXiv modern (e.g., 2024.01234 or arXiv:2024.01234v2)
+  const arxivRe = /\barxiv[:\s]*([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)\b/gi;
+  while ((m = arxivRe.exec(text))) tokens.add(`arxiv:${m[1]}`);
+
+  // arXiv legacy (e.g., cs.DL/0102034)
+  const arxivOld = /\barxiv[:\s]*([a-z\-]+(?:\.[a-z\-]+)?\/[0-9]{7}(?:v\d+)?)\b/gi;
+  while ((m = arxivOld.exec(text))) tokens.add(`arxiv:${m[1]}`);
+
+  return Array.from(tokens);
+}
+
 async function resolveTokenToCSL(token) {
   const low = token.toLowerCase();
   if (low.startsWith('doi:') || low.startsWith('10.')) return await fetchByDOI(low.replace(/^doi:/,''));
   if (low.startsWith('pmid:')) return await fetchByPMID(low.replace(/^pmid:/,''));
   if (low.startsWith('arxiv:')) return await fetchByArXiv(low.replace(/^arxiv:/,''));
-  // heuristics
   if (/^10\.\d{4,9}\//.test(token)) return await fetchByDOI(token);
-  if (/^\d{6,}$/.test(token)) return await fetchByPMID(token);
+  if (/^\d{6,9}$/.test(token)) return await fetchByPMID(token);
   if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(token)) return await fetchByArXiv(token);
-  // fall back to minimal stub
-  return { type:'article-journal', title: token, author:[{ family:'Unknown', given:'' }], issued:{'date-parts':[[new Date().getFullYear()]]}, id: token };
+  return {
+    type:'article-journal',
+    title: token,
+    author:[{ family:'Unknown', given:'' }],
+    issued:{ 'date-parts': [[ new Date().getFullYear() ]] },
+    id: token
+  };
 }
 
 export default function QnA(){
@@ -34,8 +65,7 @@ export default function QnA(){
   const current = all.find(s => s.id === sectionId) || active[0] || all[0] || null;
 
   React.useEffect(() => {
-    if (!current) return;
-    if (sectionId !== current.id) nav(`/qa/${current.id}`, { replace: true });
+    if (current && sectionId !== current.id) nav(`/qa/${current.id}`, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
 
@@ -51,7 +81,7 @@ export default function QnA(){
   const id = current.id;
   const [tone, setTone]   = React.useState((project.sections[id]?.tone)  || 'neutral');
   const [notes, setNotes] = React.useState((project.sections[id]?.notes) || '');
-  const [cites, setCites] = React.useState((project.sections[id]?.cites) || ''); // NEW
+  const [cites, setCites] = React.useState((project.sections[id]?.cites) || ''); // optional manual field
   const draft = project.sections[id]?.draft || '';
   const [busy, setBusy] = React.useState(false);
 
@@ -68,7 +98,6 @@ export default function QnA(){
     update(p => ({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), cites: v } } }));
   }
 
-  // Prev/Next among active
   const idx = active.findIndex(s => s.id === current.id);
   const prevId = idx > 0 ? active[idx - 1].id : null;
   const nextId = idx >= 0 && idx < active.length - 1 ? active[idx + 1].id : null;
@@ -76,13 +105,17 @@ export default function QnA(){
   async function draftWithAI(){
     setBusy(true);
     try{
-      // 1) Resolve citations to CSL-JSON and merge into project references
-      const tokens = parseCitationTokens(cites);
+      // 1) Collect citations: manual field + auto-detected from Notes
+      const manual = parseCitationTokens(cites);
+      const detected = detectIdsFromText(notes);
+      const tokens = Array.from(new Set([...manual, ...detected]));
+
+      // 2) Resolve to CSL-JSON and merge into project.references
       const newRefs = [];
       for (const t of tokens) {
         try { newRefs.push(await resolveTokenToCSL(t)); } catch(e){ console.warn('Failed ref', t, e); }
       }
-      // Merge into project state and capture the keys used
+
       let keysUsed = [];
       update(p => {
         const merged = mergeReferences(p.references, newRefs);
@@ -90,7 +123,7 @@ export default function QnA(){
         return { ...p, references: merged };
       });
 
-      // 2) Ask AI to draft the section from notes
+      // 3) Draft the section from notes
       const { data } = await axios.post('/api/ai/draft', {
         sectionName: current.name,
         tone,
@@ -104,7 +137,7 @@ export default function QnA(){
       });
       let text = data.text || '';
 
-      // 3) Post-insert in-text citations at the end of the first paragraph (or end of text)
+      // 4) Insert in-text citation for the detected/entered refs
       if (keysUsed.length) {
         const intext = formatInText(project.styleId, (project.references || {}), keysUsed);
         if (intext) {
@@ -136,12 +169,12 @@ export default function QnA(){
         <h2 style={{marginTop:12}}>{current.name} — Guided Q&A</h2>
 
         <label>Notes / key points for this section</label>
-        <textarea className="input" rows="8" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Bullet points, numbers, constraints, citations to include, etc."/>
+        <textarea className="input" rows="8" value={notes} onChange={e=>onNotesChange(e.target.value)} placeholder="Paste bullets, numbers, and you can include DOIs/PMIDs/arXiv anywhere here."/>
 
         <div style={{marginTop:10}}>
-          <label>Citations for this section (DOI / PMID / arXiv, separated by comma)</label>
+          <label>(Optional) Citations for this section</label>
           <input className="input" value={cites} onChange={e=>onCitesChange(e.target.value)} placeholder="e.g., 10.1038/nmeth.4823, pmid:12345678, arxiv:2401.01234"/>
-          <div className="warn" style={{marginTop:6}}>We’ll fetch metadata, add to References, and insert the in-text citation using your chosen style.</div>
+          <div className="warn" style={{marginTop:6}}>Tip: We now auto-detect citations inside Notes, so this field is optional.</div>
         </div>
 
         <div className="row" style={{marginTop:12, gridTemplateColumns:'1fr auto', gap:8}}>
