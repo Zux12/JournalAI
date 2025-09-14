@@ -164,6 +164,7 @@ export default function QnA(){
       }
 
       setSectionDraft(id, text);
+      setSectionCitedKeys(id, keysUsed);
     } finally { setBusy(false); }
   }
 
