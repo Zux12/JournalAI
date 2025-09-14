@@ -164,6 +164,56 @@ Guidelines:
 });
 
 
+api.post('/ai/caption', async (req, res) => {
+  try {
+    const {
+      kind = 'figure',          // 'figure' | 'table'
+      id = '',
+      filename = '',
+      title = '',
+      discipline = '',
+      variables = '',           // e.g., "Shear rate (s⁻¹), viscosity (Pa·s), n=3"
+      notes = ''                // any free text hints
+    } = req.body || {};
+
+    const sys =
+      'You write concise, publication-ready captions for academic figures/tables. ' +
+      'Be precise, neutral, and non-promotional. Prefer <40 words. ' +
+      'Include variables/units if provided. Do not invent data. Do not cite references. ' +
+      'Use a single sentence when possible.';
+
+    const user =
+`Compose a caption for a ${kind}.
+
+Context:
+- Manuscript Title: ${title || '(none)'}
+- Discipline: ${discipline || '(none)'}
+- ID: ${id || '(none)'}
+- Filename: ${filename || '(none)'}
+- Variables/Units: ${variables || '(none)'}
+- Notes: ${notes || '(none)'}
+
+Rules:
+- Keep it clear and specific to what the ${kind} shows.
+- Mention variables/units tersely if relevant.
+- Avoid claims about performance beyond what is stated.
+- No references or citations.
+- Aim for ~20–40 words.`;
+
+    const caption = await openaiChat(
+      [
+        { role: 'system', content: sys },
+        { role: 'user', content: user }
+      ],
+      'gpt-4o-mini',
+      0.3
+    );
+    res.json({ caption: (caption || '').trim() });
+  } catch (e) {
+    console.error('AI caption error:', e?.message || e);
+    res.status(500).json({ error: e?.message || 'AI caption failed' });
+  }
+});
 
 
 api.post('/ai/humanize', async (req, res) => {
