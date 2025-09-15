@@ -197,7 +197,7 @@ const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] stat
 
     const chosen = sectionsForScope(); // chosen subset (objects with title,text)
     const indexMap = new Map(chosen.map((s, i) => [s.title, i]));
-    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+    const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
     setHmDetails(details);
     setHmTotal(chosen.length);
 
@@ -211,25 +211,25 @@ const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] stat
       if (hmCancel) break;
       const sec = chosen[i];
       setHmIndex(i);
-      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+      setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'humanizing' } : d));
 
-      const original = piecesByTitle.get(sec.title) || '';
+      const original = piecesByTitle.get(sec.name) || '';
       const sigBefore = countsSignature(original);
       try{
-        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.name}\n\n${original}`, level: humanizeLevel });
         const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
         const sigAfter = countsSignature(humanized);
         const safe = (sigBefore === sigAfter);
-        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+        out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status: safe?'done':'fallback' } : d));
       } catch (e) {
-        out.push(`# ${sec.title}\n\n${original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+        out.push(`# ${sec.name}\n\n${original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'fallback' } : d));
       }
     }
 
     // Add the untouched sections (outside scope) in original form, preserving order
-    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
+    const untouched = pieces.filter(p => !chosen.find(c => c.name===p.title));
     for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
 
     setHmStage('Assembling');
@@ -303,7 +303,7 @@ async function humanizeAndDownloadDocx(){
     const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
 
     const chosen = sectionsForScope();
-    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+    const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
     setHmDetails(details);
     setHmTotal(chosen.length);
 
@@ -320,20 +320,20 @@ async function humanizeAndDownloadDocx(){
       const original = piecesByTitle.get(sec.title) || '';
       const sigBefore = countsSignature(original);
       try{
-        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.name}\n\n${original}`, level: humanizeLevel });
         const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
         const sigAfter = countsSignature(humanized);
         const safe = (sigBefore === sigAfter);
-        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+        out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status: safe?'done':'fallback' } : d));
       } catch (e) {
-        out.push(`# ${sec.title}\n\n${original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+        out.push(`# ${sec.name}\n\n${original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'fallback' } : d));
       }
     }
 
     // untouched sections in original form
-    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
+    const untouched = pieces.filter(p => !chosen.find(c => c.name===p.title));
     for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
 
     setHmStage('Assembling');
