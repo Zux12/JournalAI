@@ -223,7 +223,8 @@ api.post('/export/docx', async (req, res) => {
       return res.status(400).json({ error: 'No content provided' });
     }
 
-    const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
+    const { Document, Packer, Paragraph, HeadingLevel, AlignmentType } = require('docx');
+
 
     // Simple markdown-ish parse: "# " → H1, "## " → H2, otherwise normal para
     const lines = String(content).split(/\r?\n/);
@@ -231,15 +232,15 @@ api.post('/export/docx', async (req, res) => {
     for (let raw of lines) {
       const line = raw.replace(/\s+$/, '');
       if (!line.trim()) { paras.push(new Paragraph('')); continue; }
-      if (line.startsWith('### ')) {
-        paras.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3 }));
-      } else if (line.startsWith('## ')) {
-        paras.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2 }));
-      } else if (line.startsWith('# ')) {
-        paras.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1 }));
-      } else {
-        paras.push(new Paragraph({ text: line }));
-      }
+if (line.startsWith('### ')) {
+  paras.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3, alignment: AlignmentType.JUSTIFIED }));
+} else if (line.startsWith('## ')) {
+  paras.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2, alignment: AlignmentType.JUSTIFIED }));
+} else if (line.startsWith('# ')) {
+  paras.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1, alignment: AlignmentType.JUSTIFIED }));
+} else {
+  paras.push(new Paragraph({ text: line, alignment: AlignmentType.JUSTIFIED }));
+}     
     }
 
     const doc = new Document({
