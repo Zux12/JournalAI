@@ -22,6 +22,34 @@ export default function Preview(){
 const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
 const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
 
+// Restore last-used preferences on load
+React.useEffect(()=>{
+  try{
+    const raw = localStorage.getItem('journalai.prefs');
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.humanizeLevel) setHumanizeLevel(p.humanizeLevel);
+    if (p.scope) setScope(p.scope);
+    if (Array.isArray(p.scopeSelected)) setScopeSelected(p.scopeSelected);
+    if (typeof p.useCSL === 'boolean') setUseCSL(p.useCSL);
+    if (typeof p.renumber === 'boolean') setRenumber(p.renumber);
+  }catch{}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// Persist preferences when they change
+React.useEffect(()=>{
+  const data = {
+    humanizeLevel,
+    scope,
+    scopeSelected,
+    useCSL,
+    renumber
+  };
+  try{ localStorage.setItem('journalai.prefs', JSON.stringify(data)); }catch{}
+}, [humanizeLevel, scope, scopeSelected, useCSL, renumber]);
+
+  
 const [hmOpen, setHmOpen] = React.useState(false);
 const [hmForDocx, setHmForDocx] = React.useState(false);
 const [hmCancel, setHmCancel] = React.useState(false);
@@ -483,6 +511,40 @@ async function retryFailedDocx(){
   return hmDetails.filter(d => d.status === 'fallback').map(d => d.name);
 }
 
+// --- Submission checklist helpers (place above the "async preview text" state) ---
+function checklistForSection(name, text, level='light'){
+  const t = String(text || '');
+  const words = t.trim() ? t.trim().split(/\s+/).length : 0;
+  const sentences = (t.match(/[.!?](\s|$)/g) || []).length;
+  const cites = ((t.match(/\[(?:\d+(?:–\d+)?(?:,\s*\d+(?:–\d+)?)*)\]/g) || []).length)
+              + ((t.match(/\([^)]+\d{4}[a-z]?(?:;[^)]*\d{4}[a-z]?)*\)/g) || []).length);
+  const hasFig = /\{fig:|Figure\s+\d/.test(t);
+  const hasTab = /\{tab:|Table\s+\d/.test(t);
+
+  // expected citations per ~150 words, by level
+  const per150 = { proofread:0.4, light:0.7, medium:1.2, heavy:1.6, extreme:2.1, ultra:2.4 }[String(level).toLowerCase()] ?? 0.7;
+  const expected = Math.max(1, Math.round((words/150) * per150));
+
+  const warnings = [];
+  if (words < 120) warnings.push('Short (<120 words)');
+  if (cites < expected) warnings.push(`Low citation density (${cites}/${expected})`);
+  if (/^introduction$/i.test(name) && cites < 2) warnings.push('Intro typically needs ≥2 citations');
+  if (/results/i.test(name) && !(hasFig || hasTab)) warnings.push('Results: add a figure or table reference');
+
+  return { words, sentences, cites, hasFig, hasTab, warnings };
+}
+
+function buildChecklistData(){
+  // use current drafts shown in Preview
+  const rows = [];
+  for (const s of order.filter(x=>!x.skipped && x.id!=='refs')) {
+    const txt = project.sections[s.id]?.draft || '';
+    rows.push({ section: s.name, ...checklistForSection(s.name, txt, humanizeLevel) });
+  }
+  return rows;
+}
+
+  
   
   // async preview text
   const [preview, setPreview] = React.useState('');
@@ -585,6 +647,38 @@ async function retryFailedDocx(){
   Tip: DOCX is the non-humanized version. Use “Humanize & Download (TXT)” if you want a lighter rewrite.
 </div>
 
+{/* Submission checklist */}
+<div className="card" style={{marginTop:12}}>
+  <h3>Submission checklist</h3>
+  <div style={{overflowX:'auto'}}>
+    <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+      <thead>
+        <tr style={{textAlign:'left'}}>
+          <th style={{padding:'6px'}}>Section</th>
+          <th style={{padding:'6px'}}>Words</th>
+          <th style={{padding:'6px'}}>Cites</th>
+          <th style={{padding:'6px'}}>Fig/Tab</th>
+          <th style={{padding:'6px'}}>Warnings</th>
+        </tr>
+      </thead>
+      <tbody>
+        {buildChecklistData().map((r,i)=>(
+          <tr key={i} style={{borderTop:'1px solid #e5e7eb'}}>
+            <td style={{padding:'6px'}}>{r.section}</td>
+            <td style={{padding:'6px'}}>{r.words}</td>
+            <td style={{padding:'6px'}}>{r.cites}</td>
+            <td style={{padding:'6px'}}>{(r.hasFig?'Fig ':'')+(r.hasTab?'Tab':'') || '—'}</td>
+            <td style={{padding:'6px', color:r.warnings.length? '#b45309':'#2563eb'}}>
+              {r.warnings.length ? r.warnings.join(' • ') : 'Looks good'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+      
 {hmOpen && (
   <div style={{
     position:'fixed', inset:0, background:'rgba(0,0,0,0.35)',
