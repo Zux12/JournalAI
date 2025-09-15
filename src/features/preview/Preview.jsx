@@ -196,7 +196,6 @@ const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] stat
     const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
 
     const chosen = sectionsForScope(); // chosen subset (objects with title,text)
-    const indexMap = new Map(chosen.map((s, i) => [s.title, i]));
     const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
     setHmDetails(details);
     setHmTotal(chosen.length);
@@ -315,9 +314,9 @@ async function humanizeAndDownloadDocx(){
       if (hmCancel) break;
       const sec = chosen[i];
       setHmIndex(i);
-      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+      setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'humanizing' } : d));
 
-      const original = piecesByTitle.get(sec.title) || '';
+      const original = piecesByTitle.get(sec.name) || '';
       const sigBefore = countsSignature(original);
       try{
         const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.name}\n\n${original}`, level: humanizeLevel });
