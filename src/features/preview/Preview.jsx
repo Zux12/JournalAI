@@ -29,6 +29,8 @@ const [hmStage, setHmStage] = React.useState('');     // 'Preparing' | 'Humanizi
 const [hmIndex, setHmIndex] = React.useState(0);      // current section index (0-based)
 const [hmTotal, setHmTotal] = React.useState(0);      // total sections to process
 const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] status: pending/humanizing/done/fallback
+const [hmShowDetails, setHmShowDetails] = React.useState(true);
+
 
   // ---------- Front matter ----------
   function buildFrontMatter(){
@@ -189,7 +191,7 @@ const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] stat
 
   // TXT humanize (chunked)
  async function humanizeAndDownload(){
-  setHmOpen(true); setHmForDocx(false); setHmCancel(false);
+  setHmOpen(true); setHmForDocx(false); setHmCancel(false); setHmShowDetails(true);
   try{
     setHmStage('Preparing');
     const fm = buildFrontMatter();
@@ -295,7 +297,7 @@ function countsSignature(txt=''){
 
   // DOCX humanize (chunked)
 async function humanizeAndDownloadDocx(){
-  setHmOpen(true); setHmForDocx(true); setHmCancel(false);
+  setHmOpen(true); setHmForDocx(true); setHmCancel(false); setHmShowDetails(true);
   try{
     setHmStage('Preparing');
     const fm = buildFrontMatter();
@@ -611,11 +613,18 @@ async function retryFailedDocx(){
   )}
 
   <div style={{marginLeft:'auto', display:'flex', gap:8, alignItems:'center'}}>
-    <label><input type="checkbox" onChange={()=>{/* (optional) hook up later */}} /> Details</label>
-    <button onClick={()=>setHmOpen(false)}>Close</button>
-  </div>
+  <label>
+    <input
+      type="checkbox"
+      checked={hmShowDetails}
+      onChange={(e)=>setHmShowDetails(e.target.checked)}
+    /> Details
+  </label>
+  <button onClick={()=>setHmOpen(false)}>Close</button>
 </div>
 
+</div>
+{hmShowDetails && (
       <div style={{maxHeight:'30vh', overflow:'auto', marginTop:10}}>
         <table style={{width:'100%', fontSize:13, borderCollapse:'collapse'}}>
           <thead>
@@ -635,6 +644,7 @@ async function retryFailedDocx(){
           </tbody>
         </table>
       </div>
+  )}
     </div>
   </div>
 )}
