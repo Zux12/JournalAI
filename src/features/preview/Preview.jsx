@@ -7,17 +7,7 @@ import { collectFigureTableMaps, applyFigTabTokens, buildLists } from '../../lib
 import { formatCSLBibliography } from '../../lib/csl.js';
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
-const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
-const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
-const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
 
-const [hmOpen, setHmOpen] = React.useState(false);
-const [hmForDocx, setHmForDocx] = React.useState(false);
-const [hmCancel, setHmCancel] = React.useState(false);
-const [hmStage, setHmStage] = React.useState('');     // 'Preparing' | 'Humanizing' | 'Assembling' | 'Generating'
-const [hmIndex, setHmIndex] = React.useState(0);      // current section index (0-based)
-const [hmTotal, setHmTotal] = React.useState(0);      // total sections to process
-const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] status: pending/humanizing/done/fallback
 
 
 
@@ -28,6 +18,17 @@ export default function Preview(){
   const [hzBusy, setHzBusy] = React.useState(false);
   const [hzMode, setHzMode] = React.useState('light'); // light|medium
   const order = project.planner.sections || [];
+  const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
+const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
+const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
+
+const [hmOpen, setHmOpen] = React.useState(false);
+const [hmForDocx, setHmForDocx] = React.useState(false);
+const [hmCancel, setHmCancel] = React.useState(false);
+const [hmStage, setHmStage] = React.useState('');     // 'Preparing' | 'Humanizing' | 'Assembling' | 'Generating'
+const [hmIndex, setHmIndex] = React.useState(0);      // current section index (0-based)
+const [hmTotal, setHmTotal] = React.useState(0);      // total sections to process
+const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] status: pending/humanizing/done/fallback
 
   // ---------- Front matter ----------
   function buildFrontMatter(){
@@ -293,6 +294,72 @@ function countsSignature(txt=''){
     }
   }
 
+  // DOCX humanize (chunked)
+async function humanizeAndDownloadDocx(){
+  setHmOpen(true); setHmForDocx(true); setHmCancel(false);
+  try{
+    setHmStage('Preparing');
+    const fm = buildFrontMatter();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+
+    const chosen = sectionsForScope();
+    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+    setHmDetails(details);
+    setHmTotal(chosen.length);
+
+    const out = [fm];
+    const piecesByTitle = new Map(pieces.map(p => [p.title, p.text]));
+
+    setHmStage('Humanizing');
+    for (let i = 0; i < chosen.length; i++) {
+      if (hmCancel) break;
+      const sec = chosen[i];
+      setHmIndex(i);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+
+      const original = piecesByTitle.get(sec.title) || '';
+      const sigBefore = countsSignature(original);
+      try{
+        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+        const sigAfter = countsSignature(humanized);
+        const safe = (sigBefore === sigAfter);
+        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+      } catch (e) {
+        out.push(`# ${sec.title}\n\n${original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+      }
+    }
+
+    // untouched sections in original form
+    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
+    for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
+
+    setHmStage('Assembling');
+    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
+    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+
+    const finalText = out.join('\n\n');
+
+    setHmStage('Generating');
+    const { data } = await axios.post(
+      '/api/export/docx',
+      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx` },
+      { responseType: 'arraybuffer' }
+    );
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } finally {
+    setHmOpen(false);
+  }
+}
+  
   // async preview text
   const [preview, setPreview] = React.useState('');
   React.useEffect(() => {
@@ -453,68 +520,4 @@ function countsSignature(txt=''){
 }
 
 
-  // DOCX humanize (chunked)
-async function humanizeAndDownloadDocx(){
-  setHmOpen(true); setHmForDocx(true); setHmCancel(false);
-  try{
-    setHmStage('Preparing');
-    const fm = buildFrontMatter();
-    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
 
-    const chosen = sectionsForScope();
-    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
-    setHmDetails(details);
-    setHmTotal(chosen.length);
-
-    const out = [fm];
-    const piecesByTitle = new Map(pieces.map(p => [p.title, p.text]));
-
-    setHmStage('Humanizing');
-    for (let i = 0; i < chosen.length; i++) {
-      if (hmCancel) break;
-      const sec = chosen[i];
-      setHmIndex(i);
-      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
-
-      const original = piecesByTitle.get(sec.title) || '';
-      const sigBefore = countsSignature(original);
-      try{
-        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
-        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
-        const sigAfter = countsSignature(humanized);
-        const safe = (sigBefore === sigAfter);
-        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
-      } catch (e) {
-        out.push(`# ${sec.title}\n\n${original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
-      }
-    }
-
-    // untouched sections in original form
-    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
-    for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
-
-    setHmStage('Assembling');
-    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
-    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
-    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
-    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
-
-    const finalText = out.join('\n\n');
-
-    setHmStage('Generating');
-    const { data } = await axios.post(
-      '/api/export/docx',
-      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx` },
-      { responseType: 'arraybuffer' }
-    );
-    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
-  } finally {
-    setHmOpen(false);
-  }
-}
