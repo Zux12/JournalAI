@@ -7,6 +7,19 @@ import { collectFigureTableMaps, applyFigTabTokens, buildLists } from '../../lib
 import { formatCSLBibliography } from '../../lib/csl.js';
 
 const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
+const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
+const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
+const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
+
+const [hmOpen, setHmOpen] = React.useState(false);
+const [hmForDocx, setHmForDocx] = React.useState(false);
+const [hmCancel, setHmCancel] = React.useState(false);
+const [hmStage, setHmStage] = React.useState('');     // 'Preparing' | 'Humanizing' | 'Assembling' | 'Generating'
+const [hmIndex, setHmIndex] = React.useState(0);      // current section index (0-based)
+const [hmTotal, setHmTotal] = React.useState(0);      // total sections to process
+const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] status: pending/humanizing/done/fallback
+
+
 
 export default function Preview(){
   const { project } = useProjectState();
@@ -174,38 +187,92 @@ export default function Preview(){
   }
 
   // TXT humanize (chunked)
-  async function humanizeAndDownload(){
-    setHzBusy(true);
-    try{
-      const fm = buildFrontMatter();
-      const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
-      const out = [fm];
+ async function humanizeAndDownload(){
+  setHmOpen(true); setHmForDocx(false); setHmCancel(false);
+  try{
+    setHmStage('Preparing');
+    const fm = buildFrontMatter();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
 
-      for (const p of pieces) {
-        const chunk = `# ${p.title}\n\n${p.text}`;
-        const { data } = await axios.post('/api/ai/humanize', { text: chunk, degree: hzMode });
-        out.push((data && typeof data.text === 'string') ? data.text : chunk);
+    const chosen = sectionsForScope(); // chosen subset (objects with title,text)
+    const indexMap = new Map(chosen.map((s, i) => [s.title, i]));
+    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+    setHmDetails(details);
+    setHmTotal(chosen.length);
+
+    const out = [fm];
+
+    // Build a quick lookup from all pieces by title
+    const piecesByTitle = new Map(pieces.map(p => [p.title, p.text]));
+
+    setHmStage('Humanizing');
+    for (let i = 0; i < chosen.length; i++) {
+      if (hmCancel) break;
+      const sec = chosen[i];
+      setHmIndex(i);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+
+      const original = piecesByTitle.get(sec.title) || '';
+      const sigBefore = countsSignature(original);
+      try{
+        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+        const sigAfter = countsSignature(humanized);
+        const safe = (sigBefore === sigAfter);
+        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+      } catch (e) {
+        out.push(`# ${sec.title}\n\n${original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
       }
-
-      const refsText = (useCSL && refsCSL?.trim()) ? refsCSL : refsSimple;
-      if (listOfFigures?.trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
-      if (listOfTables?.trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
-      if (refsText?.trim())      out.push(`\n# References\n\n${refsText}`);
-
-      const finalText = out.join('\n\n');
-      const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${hzMode}.txt`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
-    } catch (err) {
-      console.error('Humanize failed:', err);
-      alert(`Humanize failed: ${err?.response?.data?.error || err.message}`);
-    } finally {
-      setHzBusy(false);
     }
-  }
 
+    // Add the untouched sections (outside scope) in original form, preserving order
+    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
+    for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
+
+    setHmStage('Assembling');
+    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
+    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+
+    const finalText = out.join('\n\n');
+
+    // Download TXT
+    const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=`manuscript_humanized_${humanizeLevel}.txt`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } finally {
+    setHmOpen(false);
+  }
+}
+
+
+
+  function sectionsForScope(){
+  const secs = order.filter(x=>!x.skipped && x.id!=='refs');
+  if (scope === 'entire') return secs;
+  if (scope === 'selected' && scopeSelected.length) {
+    const set = new Set(scopeSelected);
+    return secs.filter(s => set.has(s.id));
+  }
+  if (scope === 'abstract') return secs.filter(s => /^abstract$/i.test(s.name));
+  if (scope === 'intro-discussion') return secs.filter(s => /^(introduction|discussion)$/i.test(s.name));
+  if (scope === 'conclusion') return secs.filter(s => /^conclusion$/i.test(s.name));
+  return secs;
+}
+
+function countsSignature(txt=''){
+  const figs = (txt.match(/\{fig:/g) || []).length;
+  const tabs = (txt.match(/\{tab:/g) || []).length;
+  const cites = (txt.match(/\[[0-9]/g) || []).length + (txt.match(/\(\w[^)]*\d{4}/g) || []).length;
+  return `${figs}|${tabs}|${cites}`;
+}
+
+  
   // DOCX (non-humanized)
   async function exportDocx(){
     try{
@@ -262,6 +329,56 @@ export default function Preview(){
         {preview}
       </div>
 
+<div style={{display:'flex', gap:12, flexWrap:'wrap', marginTop:12}}>
+  <div>
+    <label>Humanize level</label>
+    <select className="input" value={humanizeLevel} onChange={e=>setHumanizeLevel(e.target.value)}>
+      <option value="proofread">Proofread only</option>
+      <option value="light">Light</option>
+      <option value="medium">Medium</option>
+      <option value="heavy">Heavy</option>
+      <option value="extreme">Extreme</option>
+      <option value="ultra">Ultra</option>
+    </select>
+  </div>
+  <div>
+    <label>Scope</label>
+    <select className="input" value={scope} onChange={e=>setScope(e.target.value)}>
+      <option value="entire">Entire manuscript</option>
+      <option value="selected">Selected sections…</option>
+      <option value="abstract">Abstract only</option>
+      <option value="intro-discussion">Intro + Discussion</option>
+      <option value="conclusion">Conclusion only</option>
+    </select>
+  </div>
+  {scope === 'selected' && (
+    <div>
+      <label>Pick sections</label>
+      <select multiple className="input" style={{minWidth:220, minHeight:80}}
+        value={scopeSelected}
+        onChange={e=>{
+          const opts = Array.from(e.target.selectedOptions).map(o=>o.value);
+          setScopeSelected(opts);
+        }}>
+        {order.filter(x=>!x.skipped && x.id!=='refs').map(s=>(<option key={s.id} value={s.id}>{s.name}</option>))}
+      </select>
+    </div>
+  )}
+  <div style={{alignSelf:'end', fontSize:12, color:'#667'}}>
+    <a href="#" onClick={e=>{e.preventDefault(); alert(
+      'Humanize levels:\n' +
+      '• Proofread: grammar/punctuation only, no paraphrase.\n' +
+      '• Light: small paraphrases, better flow.\n' +
+      '• Medium: moderate paraphrase, keep structure.\n' +
+      '• Heavy: sentence-level rewrite, same paragraph.\n' +
+      '• Extreme: strong per-paragraph rewrite.\n' +
+      '• Ultra: max fluency per paragraph, tokens/numbers intact.'
+    );}}>ℹ️ What these mean</a>
+  </div>
+</div>
+
+
+      
       <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
         <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
         <label style={{marginLeft:8}}>
@@ -275,11 +392,129 @@ export default function Preview(){
           {hzBusy ? 'Humanizing…' : 'Humanize & Download (TXT)'}
         </button>
         <button onClick={exportDocx}>Download DOCX</button>
+        <button onClick={humanizeAndDownloadDocx}>Humanize & Download (DOCX)</button>
+
       </div>
 
-      <div style={{fontSize:12, color:'#667', marginTop:6}}>
-        Tip: DOCX is the non-humanized version. Use “Humanize & Download (TXT)” if you want a lighter rewrite.
+     <div style={{fontSize:12, color:'#667', marginTop:6}}>
+  Tip: DOCX is the non-humanized version. Use “Humanize & Download (TXT)” if you want a lighter rewrite.
+</div>
+
+{hmOpen && (
+  <div style={{
+    position:'fixed', inset:0, background:'rgba(0,0,0,0.35)',
+    display:'flex', alignItems:'center', justifyContent:'center', zIndex:100
+  }}>
+    <div className="card" style={{width:'min(720px, 92vw)'}}>
+      <h3>{hmForDocx ? 'Humanize & Download (DOCX)' : 'Humanize & Download (TXT)'}</h3>
+      <div style={{color:'#667', marginTop:4}}>
+        {hmStage || 'Preparing'} {hmStage==='Humanizing' ? `(${hmIndex+1}/${hmTotal})` : ''}
+      </div>
+      <div style={{height:10, background:'#eee', borderRadius:8, overflow:'hidden', marginTop:8}}>
+        <div style={{
+          height:'100%',
+          width:`${hmTotal ? Math.round(((hmStage==='Humanizing'? hmIndex : hmTotal)/Math.max(1, hmTotal))*100) : 5}%`,
+          background:'linear-gradient(90deg,#93c5fd,#3b82f6)'
+        }} />
+      </div>
+      <div style={{display:'flex', gap:8, marginTop:10}}>
+        <button onClick={()=>setHmCancel(true)}>Cancel</button>
+        <button onClick={()=>setHmDetails(d=>d)} onMouseDown={e=>e.preventDefault()} />
+        <label style={{marginLeft:'auto'}}>
+          <input type="checkbox" onChange={e=>setHmDetails(prev=>prev)} /> Details
+        </label>
+      </div>
+      <div style={{maxHeight:'30vh', overflow:'auto', marginTop:10}}>
+        <table style={{width:'100%', fontSize:13, borderCollapse:'collapse'}}>
+          <thead>
+            <tr><th align="left">Section</th><th align="left">Status</th></tr>
+          </thead>
+          <tbody>
+            {hmDetails.map((d,i)=>(
+              <tr key={i}>
+                <td style={{padding:'4px 6px'}}>{d.name}</td>
+                <td style={{padding:'4px 6px', color:
+                  d.status==='done' ? '#166534' :
+                  d.status==='fallback' ? '#b45309' :
+                  d.status==='humanizing' ? '#1d4ed8' : '#334155'
+                }}>{d.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
+  </div>
+)}
+
+</div> // <-- close the outer <div className="card">
+
   );
+}
+
+
+  // DOCX humanize (chunked)
+async function humanizeAndDownloadDocx(){
+  setHmOpen(true); setHmForDocx(true); setHmCancel(false);
+  try{
+    setHmStage('Preparing');
+    const fm = buildFrontMatter();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+
+    const chosen = sectionsForScope();
+    const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+    setHmDetails(details);
+    setHmTotal(chosen.length);
+
+    const out = [fm];
+    const piecesByTitle = new Map(pieces.map(p => [p.title, p.text]));
+
+    setHmStage('Humanizing');
+    for (let i = 0; i < chosen.length; i++) {
+      if (hmCancel) break;
+      const sec = chosen[i];
+      setHmIndex(i);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+
+      const original = piecesByTitle.get(sec.title) || '';
+      const sigBefore = countsSignature(original);
+      try{
+        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+        const sigAfter = countsSignature(humanized);
+        const safe = (sigBefore === sigAfter);
+        out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+      } catch (e) {
+        out.push(`# ${sec.title}\n\n${original}`);
+        setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+      }
+    }
+
+    // untouched sections in original form
+    const untouched = pieces.filter(p => !chosen.find(c => c.title===p.title));
+    for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
+
+    setHmStage('Assembling');
+    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
+    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+
+    const finalText = out.join('\n\n');
+
+    setHmStage('Generating');
+    const { data } = await axios.post(
+      '/api/export/docx',
+      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx` },
+      { responseType: 'arraybuffer' }
+    );
+    const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } finally {
+    setHmOpen(false);
+  }
 }
