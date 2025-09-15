@@ -292,30 +292,65 @@ app.listen(PORT, () => console.log(`Server on :${PORT}`));
 
 
 // ---summarize ---
-api.post('/ai/summarize', async (req, res) => {
+api.post('/ai/humanize', async (req, res) => {
   try {
-    const { text = '', maxWords = 220, focus = '' } = req.body || {};
-    if (!text || text.trim().length < 40) return res.json({ summary: '' });
+    const {
+      text = '',
+      degree = 'light',        // backward-compat: 'light' | 'medium'
+      level = null             // new: 'proofread' | 'light' | 'medium' | 'heavy' | 'extreme' | 'ultra'
+    } = req.body || {};
+
+    if (!text || text.trim().length < 20) {
+      return res.json({ text }); // nothing to do
+    }
+
+    const mode = String(level || degree || 'light').toLowerCase();
+
+    // Map levels to concise instructions (kept short for minimal token use)
+    const modeRules = {
+      'proofread':
+        'Proofread only. Fix grammar, punctuation, minor clarity. NO paraphrasing. Keep sentence order and boundaries. ' +
+        'NEVER change numbers/units, citations, or tokens like {fig:..}/{tab:..}.',
+      'light':
+        'Light paraphrase. Improve rhythm/flow. Keep sentence structure mostly intact. ' +
+        'Do NOT change numbers/units or tokens {fig:..}/{tab:..}. Do NOT add/move citations.',
+      'medium':
+        'Moderate paraphrase. Merge/split some sentences. Improve transitions. ' +
+        'Preserve facts, numbers/units, citations, and tokens {fig:..}/{tab:..}.',
+      'heavy':
+        'Heavy sentence-level rewrite for clarity. May reorder sentences WITHIN the paragraph only. ' +
+        'Preserve paragraph boundaries, facts, numbers/units, citations, and tokens {fig:..}/{tab:..}.',
+      'extreme':
+        'Strong rewrite within each paragraph for maximum clarity/conciseness. Keep paragraph boundaries. ' +
+        'NEVER alter numbers/units, citations, or tokens {fig:..}/{tab:..}.',
+      'ultra':
+        'Maximum fluency per paragraph. Compress redundancies and polish style. Keep paragraph boundaries. ' +
+        'Absolutely preserve numbers/units, citations, and tokens {fig:..}/{tab:..}.'
+    };
+
+    const rules = modeRules[mode] || modeRules['light'];
 
     const systemMsg =
-      'You are a domain expert summarizer. Extract the most decision-useful facts as tight bullets. Prefer concrete numbers, units, and named entities. No fluff.';
+      'You are a precise academic editor. Your output must preserve meaning, factual content, all numbers/units, ' +
+      'citations (e.g., [1] or (Author, 2020)), and tokens like {fig:ID}/{tab:ID}. Do not invent facts or citations.';
 
     const userMsg =
-`Summarize the following into 5–10 bullet points (max ~${maxWords} words total).
-If there are quantitative results, keep the numbers and units.
-${focus ? `Focus on: ${focus}\n` : ''}
-Text:
-${text.slice(0, 8000)}
-`;
+`Edit the following section according to these rules:
+${rules}
+
+TEXT:
+${text.slice(0, 12000)}  `;
 
     const out = await openaiChat(
       [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }],
       'gpt-4o-mini',
-      0.3
+      mode === 'proofread' ? 0.1 : mode === 'light' ? 0.3 : mode === 'medium' ? 0.5 : 0.6
     );
-    res.json({ summary: out });
+
+    res.json({ text: (out || '').trim() });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'AI summarize failed' });
+    console.error('AI humanize error:', e?.message || e);
+    res.status(500).json({ error: e?.message || 'AI humanize failed' });
   }
 });
+
