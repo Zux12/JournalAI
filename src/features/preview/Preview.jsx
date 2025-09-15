@@ -246,7 +246,7 @@ const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] stat
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
   } finally {
-    setHmOpen(false);
+    setHmStage('Done');
   }
 }
 
@@ -355,9 +355,132 @@ async function humanizeAndDownloadDocx(){
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
   } finally {
-    setHmOpen(false);
+    setHmStage('Done');
   }
 }
+
+async function retryFailedTxt(){
+  const names = failedNames();
+  if (!names.length) return;
+  // Re-run the same TXT flow but limit “chosen” to the failed names
+  setHmCancel(false);
+  setHmStage('Preparing');
+  const fm = buildFrontMatter();
+  const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+  const byTitle = new Map(pieces.map(p => [p.title, p.text]));
+  const chosen = pieces.filter(p => names.includes(p.title));
+
+  const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+  setHmDetails(details);
+  setHmTotal(chosen.length);
+
+  const out = [fm];
+  setHmStage('Humanizing');
+  for (let i=0; i<chosen.length; i++){
+    if (hmCancel) break;
+    const sec = chosen[i];
+    setHmIndex(i);
+    setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+    const original = byTitle.get(sec.title) || '';
+    const sigBefore = countsSignature(original);
+    try{
+      const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+      const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+      const sigAfter = countsSignature(humanized);
+      const safe = (sigBefore === sigAfter);
+      out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+    } catch {
+      out.push(`# ${sec.title}\n\n${original}`);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+    }
+  }
+  // stitch the rest (original order)
+  const rest = pieces.filter(p => !names.includes(p.title));
+  for (const p of rest) out.push(`# ${p.title}\n\n${p.text}`);
+
+  setHmStage('Assembling');
+  const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
+  if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+  if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+  if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+
+  const finalText = out.join('\n\n');
+  const blob = new Blob([finalText], { type:'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`manuscript_humanized_${humanizeLevel}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+
+  setHmStage('Done');
+}
+
+async function retryFailedDocx(){
+  const names = failedNames();
+  if (!names.length) return;
+  setHmCancel(false);
+  setHmStage('Preparing');
+  const fm = buildFrontMatter();
+  const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+  const byTitle = new Map(pieces.map(p => [p.title, p.text]));
+  const chosen = pieces.filter(p => names.includes(p.title));
+
+  const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+  setHmDetails(details);
+  setHmTotal(chosen.length);
+
+  const out = [fm];
+  setHmStage('Humanizing');
+  for (let i=0; i<chosen.length; i++){
+    if (hmCancel) break;
+    const sec = chosen[i];
+    setHmIndex(i);
+    setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'humanizing' } : d));
+    const original = byTitle.get(sec.title) || '';
+    const sigBefore = countsSignature(original);
+    try{
+      const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.title}\n\n${original}`, level: humanizeLevel });
+      const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+      const sigAfter = countsSignature(humanized);
+      const safe = (sigBefore === sigAfter);
+      out.push(`# ${sec.title}\n\n${safe ? humanized : original}`);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status: safe?'done':'fallback' } : d));
+    } catch {
+      out.push(`# ${sec.title}\n\n${original}`);
+      setHmDetails(prev => prev.map(d => d.id===sec.title ? { ...d, status:'fallback' } : d));
+    }
+  }
+  // stitch the rest (original order)
+  const rest = pieces.filter(p => !names.includes(p.title));
+  for (const p of rest) out.push(`# ${p.title}\n\n${p.text}`);
+
+  setHmStage('Assembling');
+  const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
+  if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+  if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+  if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+
+  setHmStage('Generating');
+  const { data } = await axios.post(
+    '/api/export/docx',
+    { content: out.join('\n\n'), filename: `manuscript_humanized_${humanizeLevel}.docx` },
+    { responseType: 'arraybuffer' }
+  );
+  const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+
+  setHmStage('Done');
+}
+
+
+  
+  function failedNames() {
+  return hmDetails.filter(d => d.status === 'fallback').map(d => d.name);
+}
+
   
   // async preview text
   const [preview, setPreview] = React.useState('');
@@ -447,13 +570,7 @@ async function humanizeAndDownloadDocx(){
       
       <div style={{marginTop:12, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
         <button className="btn" onClick={exportAll}>Export Full Manuscript (TXT)</button>
-        <label style={{marginLeft:8}}>
-          Humanize:
-          <select className="input" style={{width:150, marginLeft:6}} value={hzMode} onChange={e=>setHzMode(e.target.value)}>
-            <option value="light">Light</option>
-            <option value="medium">Medium</option>
-          </select>
-        </label>
+      
         <button onClick={humanizeAndDownload} disabled={hzBusy}>
           {hzBusy ? 'Humanizing…' : 'Humanize & Download (TXT)'}
         </button>
@@ -483,13 +600,22 @@ async function humanizeAndDownloadDocx(){
           background:'linear-gradient(90deg,#93c5fd,#3b82f6)'
         }} />
       </div>
-      <div style={{display:'flex', gap:8, marginTop:10}}>
-        <button onClick={()=>setHmCancel(true)}>Cancel</button>
-        <button onClick={()=>setHmDetails(d=>d)} onMouseDown={e=>e.preventDefault()} />
-        <label style={{marginLeft:'auto'}}>
-          <input type="checkbox" onChange={e=>setHmDetails(prev=>prev)} /> Details
-        </label>
-      </div>
+  <div style={{display:'flex', gap:8, marginTop:10, alignItems:'center'}}>
+  <button onClick={()=>setHmCancel(true)}>Cancel</button>
+
+  {/* Show retry only when run is Done and there were fallbacks */}
+  {hmStage === 'Done' && hmDetails.some(d=>d.status==='fallback') && (
+    <button onClick={()=> (hmForDocx ? retryFailedDocx() : retryFailedTxt())}>
+      Retry failed ({hmDetails.filter(d=>d.status==='fallback').length})
+    </button>
+  )}
+
+  <div style={{marginLeft:'auto', display:'flex', gap:8, alignItems:'center'}}>
+    <label><input type="checkbox" onChange={()=>{/* (optional) hook up later */}} /> Details</label>
+    <button onClick={()=>setHmOpen(false)}>Close</button>
+  </div>
+</div>
+
       <div style={{maxHeight:'30vh', overflow:'auto', marginTop:10}}>
         <table style={{width:'100%', fontSize:13, borderCollapse:'collapse'}}>
           <thead>
