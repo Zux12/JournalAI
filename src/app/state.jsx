@@ -24,6 +24,7 @@ const DEFAULT_PROJECT = {
   sections: {},
   figures: [],
   tables: [],
+  visualProposals: [], // proposed figures/tables from manuscript (persists across navigation)
   sources: [], // <— NEW: uploaded article PDFs after extraction/OCR
   declarations: { ethicsIRB:'', consent:'', dataAvailability:'', codeAvailability:'', conflicts:'' },
   references: { styleId:'ieee', items:[], unresolved:[] },
@@ -56,9 +57,10 @@ export function ProjectProvider({ children }){
   const setSectionCitedKeys = (id, citedKeys)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), citedKeys } } }));
   const setFigures = (figures)=>update(p=>({ ...p, figures }));
   const setTables  = (tables)=>update(p=>({ ...p, tables }));
+  const setVisualProposals = (visualProposals)=>update(p=>({ ...p, visualProposals }));
   const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setSources, setReferences };
+  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setSources, setReferences };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
