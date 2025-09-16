@@ -215,6 +215,136 @@ Rules:
   }
 });
 
+api.post('/ai/propose-visuals', async (req, res) => {
+  try {
+    const {
+      title = '',
+      discipline = '',
+      resultsText = '',
+      discussionText = '',
+      length = 'medium',      // 'short'|'medium'|'long'
+      maxItems = 3,
+      allowExternal = false
+    } = req.body || {};
+
+    const sys = 'You are an academic visual design assistant. Output JSON ONLY.';
+    const lenGuide = length === 'short' ? 'one short paragraph (~80-120 words)'
+                    : length === 'long'  ? 'one long paragraph (~300-400 words)'
+                    :                      'one medium paragraph (~180-250 words)';
+    const user =
+`Task: Propose up to ${maxItems} visuals (figures or tables) that would best support the manuscript's Results and Discussion.
+
+Context:
+- Title: ${title}
+- Discipline: ${discipline}
+- Results excerpt:
+${(resultsText||'').slice(0,4000)}
+- Discussion excerpt:
+${(discussionText||'').slice(0,4000)}
+
+Rules:
+- For each proposal, choose kind: "figure" or "table".
+- Suggest a concise id (kebab-case), a short title, a caption skeleton (include variables/units), and a placement suggestion:
+  - placement.section: "Results" or "Discussion"
+  - placement.anchor: the exact sentence or short substring AFTER which to insert
+- Provide ${lenGuide} of write-up text that describes the visual (no new claims).
+- Prefer visuals that map to claims already in the text. NO invented data.
+- If suggesting external visuals, include "source" and "license"; ONLY if allowExternal is true.
+- Do NOT modify numbers/units/citations. Do NOT output anything except JSON.
+
+Respond with:
+{ "proposals": [
+  { "kind":"figure|table","id":"string","title":"string",
+    "caption":"string","variables":"string",
+    "placement":{"section":"Results|Discussion","anchor":"string"},
+    "paragraphs":["string"]
+  }
+] }`;
+
+    const content = await openaiChat(
+      [{ role: 'system', content: sys }, { role: 'user', content: user }],
+      'gpt-4o-mini',
+      0.4
+    );
+
+    let json = null;
+    try { json = JSON.parse(content); } catch { /* attempt to extract JSON */ 
+      const m = content.match(/\{[\s\S]*\}$/); 
+      json = m ? JSON.parse(m[0]) : null;
+    }
+    if (!json || !Array.isArray(json.proposals)) return res.json({ proposals: [] });
+    res.json({ proposals: json.proposals.slice(0, maxItems) });
+  } catch (e) {
+    console.error('propose-visuals error:', e?.message || e);
+    res.status(500).json({ error: 'propose-visuals failed' });
+  }
+});
+
+api.post('/ai/place-visual', async (req, res) => {
+  try {
+    const {
+      title = '',
+      discipline = '',
+      kind = 'figure',    // 'figure' | 'table'
+      id = '',
+      variables = '',
+      notes = '',
+      caption = '',
+      manuscriptSections = [], // [{name, text}]
+      length = 'medium'        // 'short'|'medium'|'long'
+    } = req.body || {};
+
+    const sys = 'You are an academic visual placement assistant. Output JSON ONLY.';
+    const lenGuide = length === 'short' ? 'one short paragraph (~80-120 words)'
+                    : length === 'long'  ? 'one long paragraph (~300-400 words)'
+                    :                      'one medium paragraph (~180-250 words)';
+
+    const user =
+`Task: Suggest the best placement for a ${kind} with id "${id}" in the manuscript and draft ${lenGuide} describing it.
+
+Context:
+- Manuscript title: ${title}
+- Discipline: ${discipline}
+- Visual meta:
+  - variables/units: ${variables}
+  - notes: ${notes}
+  - caption: ${caption}
+
+Sections:
+${manuscriptSections.map(s => `### ${s.name}\n${(s.text||'').slice(0,2000)}`).join('\n\n')}
+
+Rules:
+- placement.section must be the section name as provided.
+- placement.anchor must be the exact sentence or a short snippet AFTER which the token should be inserted.
+- Provide one paragraph describing the visual in neutral academic tone. No invented data. Do not modify numbers/units/citations.
+- Output JSON ONLY:
+{ "suggestion": {
+    "placement": {"section":"name","anchor":"string"},
+    "paragraphs": ["string"]
+  }
+} `;
+
+    const content = await openaiChat(
+      [{ role:'system', content: sys }, { role:'user', content: user }],
+      'gpt-4o-mini',
+      0.4
+    );
+
+    let json = null;
+    try { json = JSON.parse(content); } catch { 
+      const m = content.match(/\{[\s\S]*\}$/); 
+      json = m ? JSON.parse(m[0]) : null;
+    }
+    if (!json || !json.suggestion) return res.json({ suggestion: null });
+    res.json({ suggestion: json.suggestion });
+  } catch (e) {
+    console.error('place-visual error:', e?.message || e);
+    res.status(500).json({ error: 'place-visual failed' });
+  }
+});
+
+
+
 // ---- DOCX Export (markdown-ish headings) ----
 api.post('/export/docx', async (req, res) => {
   try {
