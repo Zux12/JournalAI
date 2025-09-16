@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
 
 export default function Figures(){
-  const { project, setFigures, setTables, setSectionDraft } = useProjectState();
+  const { project, setFigures, setTables, setSectionDraft, setVisualProposals } = useProjectState();
   const [mode, setMode] = React.useState('figure'); // figure|table
   const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id!=='refs');
 
@@ -15,7 +15,7 @@ export default function Figures(){
   const [vizBusy, setVizBusy] = React.useState(false);
   const [vizLen, setVizLen] = React.useState('medium'); // short|medium|long
   const [vizCount, setVizCount] = React.useState(3);
-  const [proposals, setProposals] = React.useState([]); // [{kind,id,title,caption,variables,placement,paragraphs}]
+  const proposals = project.visualProposals || [];
 
   // Per-item placement suggestions
   const [placing, setPlacing] = React.useState({});     // id -> bool
@@ -137,7 +137,8 @@ export default function Figures(){
         maxItems: vizCount,
         allowExternal: false
       });
-      setProposals(Array.isArray(data?.proposals) ? data.proposals : []);
+      setVisualProposals(Array.isArray(data?.proposals) ? data.proposals : []);
+
     } finally {
       setVizBusy(false);
     }
@@ -218,6 +219,8 @@ export default function Figures(){
     <button className="btn" onClick={proposeFromManuscript} disabled={vizBusy}>
       {vizBusy ? 'Analyzing…' : 'Propose visuals from manuscript'}
     </button>
+    <button onClick={()=>setVisualProposals([])} disabled={vizBusy}>Clear proposals</button>
+
   </div>
 
   {/* Render proposals */}
