@@ -12,7 +12,7 @@ const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 
 
 export default function Preview(){
-  const { project } = useProjectState();
+  const { project, update } = useProjectState();
   const [renumber, setRenumber] = React.useState(true);
   const [useCSL, setUseCSL] = React.useState(true);
   const [hzBusy, setHzBusy] = React.useState(false);
@@ -21,6 +21,8 @@ export default function Preview(){
   const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
 const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
 const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
+  const fileRef = React.useRef(null);
+
 
 // Restore last-used preferences on load
 React.useEffect(()=>{
@@ -569,6 +571,60 @@ function buildChecklistData(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.updatedAt, renumber, useCSL]);
 
+
+function downloadProjectJson(){
+  try{
+    const safe = { ...project, updatedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(safe, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `journalai_project_${Date.now()}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    alert('Failed to save project.');
+    console.error(e);
+  }
+}
+
+function openProjectPicker(){
+  fileRef.current?.click();
+}
+
+async function handleProjectUpload(evt){
+  try{
+    const file = evt.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const loaded = JSON.parse(text);
+
+    // Confirm replace
+    const ok = confirm('Load this project file? This will replace the current project in memory.');
+    if (!ok) return;
+
+    // Minimal normalization: prefer loaded values, keep any missing keys from current project
+    // (Prevents crashes if old exports lack new fields)
+    const merged = {
+      ...project,           // keep current defaults for any new fields
+      ...loaded,            // prefer loaded content
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Replace the whole project using the provider's updater
+    update(() => merged);
+
+    alert('Project loaded.');
+  } catch (e) {
+    alert('Invalid or corrupted project file.');
+    console.error(e);
+  } finally {
+    // reset input so picking the same file again will fire the change event
+    if (evt?.target) evt.target.value = '';
+  }
+}
+
+  
+
+  
   return (
     <div className="card">
       <h2>Preview & Export (clean text)</h2>
@@ -651,8 +707,18 @@ function buildChecklistData(){
         </button>
         <button onClick={exportDocx}>Download DOCX</button>
         <button onClick={humanizeAndDownloadDocx}>Humanize & Download (DOCX)</button>
-
+        <button onClick={downloadProjectJson}>Download Project (.json)</button>
+        <button onClick={openProjectPicker}>Load Project (.json)</button>
       </div>
+
+      <input
+  type="file"
+  accept="application/json"
+  ref={fileRef}
+  onChange={handleProjectUpload}
+  style={{ display:'none' }}
+/>
+
 
      <div style={{fontSize:12, color:'#667', marginTop:6}}>
   Tip: DOCX is the non-humanized version. Use “Humanize & Download (TXT)” if you want a lighter rewrite.
