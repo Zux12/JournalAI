@@ -348,15 +348,16 @@ Rules:
 // ---- DOCX Export (markdown-ish headings) ----
 api.post('/export/docx', async (req, res) => {
   try {
-    const { content = '', filename = 'manuscript.docx' } = req.body || {};
+    const { content = '', filename = 'manuscript.docx', figMedia = {} } = req.body || {};
     if (!content || !content.trim()) {
       return res.status(400).json({ error: 'No content provided' });
     }
 
 const {
   Document, Packer, Paragraph, HeadingLevel, AlignmentType,
-  Table, TableRow, TableCell, WidthType
+  Table, TableRow, TableCell, WidthType, ImageRun
 } = require('docx');
+
 
 function parseMarkdownTable(mdLines) {
   // mdLines: array of lines between our markers [[AI-TABLEMD START ...]] and [[AI-TABLEMD END ...]]
@@ -403,6 +404,37 @@ function makeDocxTable({ headers, body }) {
 }
 
 
+function dataUrlToBuffer(durl){
+  try {
+    const m = durl.match(/^data:(image\/(png|jpeg|jpg));base64,(.+)$/i);
+    if (!m) return null;
+    return Buffer.from(m[3], 'base64');
+  } catch { return null; }
+}
+
+function imageParasForToken(tokenId){
+  const meta = figMedia[tokenId];
+  if (!meta || !meta.dataUrl) return null;             // no media, skip
+  const buf = dataUrlToBuffer(meta.dataUrl);
+  if (!buf) return null;                               // unsupported format (e.g., SVG) or bad data URL
+
+  // Default size (px). You can tune this later or derive ratio if you add width/height.
+  const width = 480;
+  const height = 360;
+
+  const img = new ImageRun({
+    data: buf,
+    transformation: { width, height }
+  });
+
+  const pImg = new Paragraph({ children: [img], alignment: AlignmentType.CENTER });
+  const cap  = meta.caption ? meta.caption : `Figure: ${tokenId}`;
+  const pCap = new Paragraph({ text: cap, alignment: AlignmentType.CENTER });
+
+  return [pImg, pCap];
+}
+
+    
     // Simple markdown-ish parse: "# " → H1, "## " → H2, otherwise normal para
 // Parse text into DOCX elements (H1/H2/H3, paragraphs, and real tables from [[AI-TABLEMD ...]] blocks)
 const lines = String(content).split(/\r?\n/);
@@ -436,6 +468,21 @@ for (let i = 0; i < lines.length; i++) {
     continue;
   }
 
+  // Figure token on its own line?  {fig:ID}
+  const figTok = line.match(/^\s*\{fig:([a-z0-9\-_]+)\}\s*$/i);
+  if (figTok) {
+    const id = figTok[1];
+    const paras = imageParasForToken(id);
+    if (paras) {
+      children.push(...paras);
+    } else {
+      // fallback: leave a placeholder paragraph if no media found
+      children.push(new Paragraph({ text: `[Missing figure: ${id}]`, alignment: AlignmentType.CENTER }));
+    }
+    continue;
+  }
+
+  
   // Headings H1/H2/H3
   if (line.startsWith('### ')) {
     children.push(new Paragraph({
