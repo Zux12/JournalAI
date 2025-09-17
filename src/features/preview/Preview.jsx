@@ -13,6 +13,10 @@ const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 
 export default function Preview(){
   const { project, update } = useProjectState();
+    // Download/Load project (JSON)
+  const fileRef = React.useRef(null);
+  const [showProjectHelp, setShowProjectHelp] = React.useState(false);
+
   const [renumber, setRenumber] = React.useState(true);
   const [useCSL, setUseCSL] = React.useState(true);
   const [hzBusy, setHzBusy] = React.useState(false);
@@ -624,6 +628,69 @@ async function handleProjectUpload(evt){
 
   
 
+function slugifyTitle(t=''){
+  const s = String(t).trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/^-+|-+$/g,'')
+    .slice(0, 60); // cap length
+  return s || null;
+}
+function tsStamp(){
+  const d = new Date();
+  const pad = (n)=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+function downloadProjectJson(){
+  try{
+    const safe = { ...project, updatedAt: new Date().toISOString() };
+    const base = slugifyTitle(project?.metadata?.title) || `journalai_project_${tsStamp()}`;
+    const name = `${base}.json`;
+    const blob = new Blob([JSON.stringify(safe, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    alert('Failed to save project.');
+    console.error(e);
+  }
+}
+
+function openProjectPicker(){
+  fileRef.current?.click();
+}
+
+async function handleProjectUpload(evt){
+  try{
+    const file = evt.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const loaded = JSON.parse(text);
+
+    const ok = confirm('Load this project file? This replaces the current project in memory (unsaved work will be lost).');
+    if (!ok) return;
+
+    // Shallow merge so missing/new fields don’t crash older files
+    const merged = {
+      ...project,
+      ...loaded,
+      updatedAt: new Date().toISOString(),
+    };
+    update(()=> merged);
+
+    alert('Project loaded.');
+  } catch (e) {
+    alert('Invalid or corrupted project file.');
+    console.error(e);
+  } finally {
+    if (evt?.target) evt.target.value = '';
+  }
+}
+
+
+
+  
   
   return (
     <div className="card">
@@ -709,6 +776,9 @@ async function handleProjectUpload(evt){
         <button onClick={humanizeAndDownloadDocx}>Humanize & Download (DOCX)</button>
         <button onClick={downloadProjectJson}>Download Project (.json)</button>
         <button onClick={openProjectPicker}>Load Project (.json)</button>
+          <a href="#" onClick={(e)=>{e.preventDefault(); setShowProjectHelp(true);}} style={{marginLeft:'auto', fontSize:12}}>
+    ℹ️ About project files
+  </a>
       </div>
 
       <input
@@ -755,6 +825,37 @@ async function handleProjectUpload(evt){
   </div>
 </div>
 
+{showProjectHelp && (
+  <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.35)',
+               display:'flex', alignItems:'center', justifyContent:'center', zIndex:120}}>
+    <div className="card" style={{width:'min(720px, 92vw)'}}>
+      <h3>About project files (.json)</h3>
+      <div style={{fontSize:14, color:'#111', lineHeight:1.45}}>
+        <p><strong>Download Project (.json)</strong> saves your entire manuscript state to a single file you can keep or share.</p>
+        <ul style={{margin:'6px 0 8px 18px'}}>
+          <li>Included: metadata, sections, drafts, references, proposals &amp; placements, figures/tables library, 600px image thumbnails, CSV 50-row previews, and toggles.</li>
+          <li>Not included: original full-resolution images; full CSVs beyond 50 rows.</li>
+        </ul>
+        <p><strong>Load Project (.json)</strong> replaces your current in-browser project with the file you pick. Keep backups if you’re unsure.</p>
+        <p><strong>Collaborate</strong>: share the .json. Your teammate can load it, continue editing, and download a new .json with their updates.</p>
+        <p><em>Filename</em>: we use a safe version of your Title (truncated) — for example:
+          <code style={{marginLeft:6, background:'#f1f5f9', padding:'2px 6px', borderRadius:6}}>
+            {slugifyTitle(project?.metadata?.title) || 'journalai_project'}_{tsStamp()}.json
+          </code>
+        </p>
+        <p style={{color:'#667', marginTop:6}}>
+          Privacy note: Downloads happen locally in your browser — nothing is uploaded to a server.
+        </p>
+      </div>
+      <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:12}}>
+        <button onClick={()=>setShowProjectHelp(false)}>Close</button>
+      </div>
+    </div>
+  </div>
+)}
+
+      
+      
       
 {hmOpen && (
   <div style={{
