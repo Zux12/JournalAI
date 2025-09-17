@@ -65,7 +65,7 @@ export function ProjectProvider({ children }){
   const setGeneratedTableProposals = (generatedTableProposals)=>update(p=>({ ...p, generatedTableProposals }));
   const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setSources, setReferences };
+  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setGeneratedTableProposals, setSources, setReferences };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
