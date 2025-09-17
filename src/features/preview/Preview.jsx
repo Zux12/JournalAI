@@ -25,7 +25,7 @@ export default function Preview(){
   const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
 const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
 const [scopeSelected, setScopeSelected] = React.useState([]);       // section IDs when 'selected'
-  const fileRef = React.useRef(null);
+
 
 
 // Restore last-used preferences on load
