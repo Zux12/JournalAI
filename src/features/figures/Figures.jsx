@@ -422,11 +422,12 @@ function removeTokensAndAiBlocks(text, kind, id){
   const tag = kind === 'table' ? 'tab' : 'fig';
 
   // Remove AI write-up block(s) for this id
-  const start = new RegExp(`\\[\\[AI-WRITEUP START ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
-  const end   = new RegExp(`\\[\\[AI-WRITEUP END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
-  // Remove everything from START to END, non-greedy
-  const block = new RegExp(`\\[\\[AI-WRITEUP START ${tag}:${escapeRegExp(id)}\\]\\][\\s\\S]*?\\[\\[AI-WRITEUP END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
-  out = out.replace(block, '');
+  const blockWU = new RegExp(`\\[\\[AI-WRITEUP START ${tag}:${escapeRegExp(id)}\\]\\][\\s\\S]*?\\[\\[AI-WRITEUP END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
+  out = out.replace(blockWU, '');
+
+  // Remove AI table-markdown block(s) for this id
+  const blockMD = new RegExp(`\\[\\[AI-TABLEMD START ${tag}:${escapeRegExp(id)}\\]\\][\\s\\S]*?\\[\\[AI-TABLEMD END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
+  out = out.replace(blockMD, '');
 
   // Remove tokens for this id
   const tokenRe = new RegExp(`\\{${tag}:${escapeRegExp(id)}\\}`, 'g');
@@ -437,6 +438,7 @@ function removeTokensAndAiBlocks(text, kind, id){
 
   return out.trim();
 }
+
 
 function deleteItemCascade(kind, id){
   const isFigure = (kind === 'figure');
@@ -477,6 +479,49 @@ This cannot be undone automatically. Continue?`;
   alert(`Deleted ${label} and cleaned related tokens/write-ups.`);
 }
 
+
+function toMarkdownTable(columns = [], rows = []) {
+  const cols = (columns || []).map(c => String(c || '').trim());
+  const lines = [];
+  if (cols.length) {
+    lines.push(`| ${cols.join(' | ')} |`);
+    lines.push(`| ${cols.map(()=> '---').join(' | ')} |`);
+  }
+  (rows || []).forEach(r => {
+    const cells = r.map(v => String(v ?? '').trim());
+    lines.push(`| ${cells.join(' | ')} |`);
+  });
+  return lines.join('\n');
+}
+
+function insertTableMarkdownIntoDraft(secId, anchor, mdTable, token, withWriteup, kindTag, id, writeupPara = '') {
+  const before = project.sections?.[secId]?.draft || '';
+  const mdBlock = mdTable ? `[[AI-TABLEMD START ${kindTag}:${id}]]\n${mdTable}\n[[AI-TABLEMD END ${kindTag}:${id}]]` : '';
+  const writeBlock = (withWriteup && writeupPara)
+    ? `[[AI-WRITEUP START ${kindTag}:${id}]]\n${writeupPara}\n[[AI-WRITEUP END ${kindTag}:${id}]]`
+    : '';
+
+  const insertion = [token, mdBlock, writeBlock].filter(Boolean).join('\n\n');
+  const next = insertAfterAnchor(before, anchor, insertion);
+  setSectionDraft(secId, next);
+}
+
+
+function insertGeneratedTableMarkdown(t, withWriteup) {
+  // ensure table exists in library
+  const exists = (project.tables || []).find(tb => tb.id === t.id);
+  if (!exists) applyGeneratedTableCreate(t);
+
+  const secId = getSectionIdByName(t.placement?.section);
+  if (!secId) return alert('Suggested section not found for this table.');
+
+  const token = `{tab:${t.id}}`;
+  const md = toMarkdownTable(t.columns || [], t.rows || []);
+  const para = t.paragraph || '';
+  insertTableMarkdownIntoDraft(secId, t.placement?.anchor, md, token, withWriteup, 'tab', t.id, para);
+  alert(withWriteup ? 'Table markdown + token + write-up inserted.' : 'Table markdown inserted.');
+}
+  
   
   
   return (
@@ -726,6 +771,27 @@ This cannot be undone automatically. Continue?`;
   </div>
 )}
 
+{mode==='table' && Array.isArray(it.sampleRows) && it.sampleRows.length > 0 && (
+  <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
+    <button className="btn" onClick={()=>{
+      const sugg = placements[it.id] || project.visualPlacements?.[it.id];
+      if (!sugg) return alert('Run Auto-placement Assist first to get a suggested anchor.');
+      const secId = getSectionIdByName(sugg.placement?.section);
+      if (!secId) return alert('Suggested section not found.');
+      const token = `{tab:${it.id}}`;
+      const md = toMarkdownTable(it.columns || [], it.sampleRows || []);
+      insertTableMarkdownIntoDraft(secId, sugg.placement?.anchor, md, token, false, 'tab', it.id, '');
+      alert('Table markdown + token inserted at suggested location.');
+    }}>Insert table (Markdown) + token</button>
+
+    <button onClick={()=>{
+      const md = toMarkdownTable(it.columns || [], it.sampleRows || []);
+      navigator.clipboard.writeText(md);
+      alert('Markdown table copied to clipboard.');
+    }}>Copy table (Markdown)</button>
+  </div>
+)}
+
 
 <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
 
@@ -819,12 +885,15 @@ This cannot be undone automatically. Continue?`;
           <div style={{marginTop:6, color:'#111'}}><em>Variables:</em> {t.variables || '—'}</div>
           <div style={{marginTop:6, whiteSpace:'pre-wrap'}}>{t.paragraph || ''}</div>
 
-          <div style={{display:'flex', gap:8, marginTop:8, flexWrap:'wrap'}}>
-            <button className="btn" onClick={()=>{ applyGeneratedTableCreate(t); }}>Create table only</button>
-            <button onClick={()=>{ applyGeneratedTableInsert(t, 'token') }}>Insert token only</button>
-            <button className="btn" onClick={()=>{ applyGeneratedTableInsert(t, 'token+writeup') }}>Create + insert token + write-up</button>
-            <button onClick={()=>{ applyGeneratedTableInsert(t, 'notes') }}>Write-up to Notes</button>
-          </div>
+<div style={{display:'flex', gap:8, marginTop:8, flexWrap:'wrap'}}>
+  <button onClick={()=>{ applyGeneratedTableCreate(t); }}>Create table only</button>
+  <button onClick={()=>{ applyGeneratedTableInsert(t, 'token') }}>Insert token only</button>
+  <button className="btn" onClick={()=>{ applyGeneratedTableInsert(t, 'token+writeup') }}>Create + insert token + write-up</button>
+  <button onClick={()=>{ applyGeneratedTableInsert(t, 'notes') }}>Write-up to Notes</button>
+  <button className="btn" onClick={()=>{ insertGeneratedTableMarkdown(t, true) }}>Insert table (Markdown) + token + write-up</button>
+  <button onClick={()=>{ insertGeneratedTableMarkdown(t, false) }}>Insert table (Markdown) only</button>
+</div>
+
         </div>
       ))}
     </div>
