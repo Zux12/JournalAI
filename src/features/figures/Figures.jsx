@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
 
 export default function Figures(){
-  const { project, setFigures, setTables, setSectionDraft, setVisualProposals } = useProjectState();
+  const { project, update, setFigures, setTables, setSectionDraft, setVisualProposals, setVisualPlacements } = useProjectState();
   const [mode, setMode] = React.useState('figure'); // figure|table
   const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id!=='refs');
 
@@ -26,29 +26,44 @@ export default function Figures(){
     return name.toLowerCase().replace(/[^a-z0-9\-]+/g,'-').replace(/(^-+|-+$)/g,'').slice(0,32) || `item-${Date.now()}`;
   }
 
-  function addItem(files){
-    const arr = Array.from(files || []);
-    if (!arr.length) return;
-    if (mode === 'figure') {
-      const next = [...figs, ...arr.map(f => ({
+function addItem(files){
+  const arr = Array.from(files || []);
+  if (!arr.length) return;
+
+  arr.forEach(async (f) => {
+    const isImage = /^image\/(png|jpeg|jpg|svg\+xml)$/.test(f.type) || /\.(png|jpe?g|svg)$/i.test(f.name);
+    const isCsv   = /text\/csv/.test(f.type) || /\.csv$/i.test(f.name);
+
+    if (mode === 'figure' && isImage) {
+      // 600px thumbnail
+      const thumbDataUrl = await genThumb600(f);
+      const next = [...(project.figures||[]), {
         id: slugId(f.name),
         name: f.name,
         caption: '',
         variables: '',
-        notes: ''
-      }))];
+        notes: '',
+        thumbDataUrl // persisted preview
+      }];
       setFigures(next);
-    } else {
-      const next = [...tabs, ...arr.map(f => ({
+    } else if (mode === 'table' && isCsv) {
+      const { columns, sampleRows } = await parseFirstRows50(f);
+      const next = [...(project.tables||[]), {
         id: slugId(f.name),
         name: f.name,
         caption: '',
         variables: '',
-        notes: ''
-      }))];
+        notes: '',
+        columns,
+        sampleRows
+      }];
       setTables(next);
+    } else {
+      alert(`Unsupported file for current type.\nCurrent type: ${mode}\nFile: ${f.name}`);
     }
-  }
+  });
+}
+
 
   function setField(kind, id, field, value){
     if (kind==='figure') {
@@ -182,20 +197,104 @@ export default function Figures(){
         manuscriptSections: secs,
         length: 'medium'
       });
-      if (data?.suggestion) {
-        setPlacements(prev => ({ ...prev, [item.id]: data.suggestion }));
-      } else {
-        setPlacements(prev => ({ ...prev, [item.id]: null }));
-      }
-    } finally {
+ if (data?.suggestion) {
+  setPlacements(prev => ({ ...prev, [item.id]: data.suggestion }));
+  update(p => ({
+    ...p,
+    visualPlacements: { ...(p.visualPlacements || {}), [item.id]: data.suggestion }
+  }));
+} 
+ else {
+  setPlacements(prev => ({ ...prev, [item.id]: null }));
+  update(p => {
+    const next = { ...(p.visualPlacements || {}) };
+    delete next[item.id];
+    return { ...p, visualPlacements: next };
+  });
+}
+
+     finally {
       setPlacing(prev => ({ ...prev, [item.id]: false }));
     }
   }
 
+async function genThumb600(file){
+  // SVG: read as text and return data URL directly (no rasterize)
+  if (/\.svg$/i.test(file.name) || file.type === 'image/svg+xml') {
+    const txt = await file.text();
+    return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(txt)));
+  }
+  // Raster images
+  const img = await new Promise((res,rej)=>{ const im = new Image(); im.onload=()=>res(im); im.onerror=rej; im.src=URL.createObjectURL(file); });
+  const scale = 600 / Math.max(img.width, img.height);
+  const w = Math.round(img.width * Math.min(1, scale));
+  const h = Math.round(img.height * Math.min(1, scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  const url = canvas.toDataURL('image/jpeg', 0.9); // lean but sharp
+  URL.revokeObjectURL(img.src);
+  return url;
+}
+
+async function parseFirstRows50(file){
+  const text = await file.text();
+  const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+  const headers = lines[0].split(',').map(h=>h.trim());
+  const rows = [];
+  for (let i=1; i<lines.length && rows.length<50; i++){
+    rows.push(lines[i].split(',').map(c=>c.trim()));
+  }
+  return { columns: headers, sampleRows: rows };
+}
+
+
+function applyPlacement(item, modeSel){
+  const sugg = placements[item.id] || project.visualPlacements?.[item.id];
+  if (!sugg) return alert('No placement suggestion yet.');
+  const secId = getSectionIdByName(sugg.placement?.section);
+  if (!secId) return alert('Suggested section not found.');
+
+  const token = mode === 'table' ? `{tab:${item.id}}` : `{fig:${item.id}}`;
+  const para  = (sugg.paragraphs && sugg.paragraphs[0]) ? sugg.paragraphs[0] : '';
+  const existing = project.sections?.[secId]?.draft || '';
+
+  let insertion = '';
+  if (modeSel === 'token+writeup') insertion = (token + (para ? `\n\n${para}` : ''));
+  else if (modeSel === 'token') insertion = token;
+  else if (modeSel === 'notes') {
+    // notes only → do not alter draft, append to Notes for that section (so user can approve later)
+    const prevNotes = project.sections?.[secId]?.notes || '';
+    const combined = prevNotes ? (prevNotes + '\n\n' + para) : para;
+    setSectionNotesFor(secId, combined);
+    return alert('Write-up added to Notes for this section.');
+  }
+
+  const next = insertAfterAnchor(existing, sugg.placement?.anchor, insertion);
+  setSectionDraft(secId, next);
+  alert('Applied placement to draft.');
+}
+
+  function setSectionNotesFor(id, notes){
+  // reuse your state updater for section notes if available; fallback: inline update
+  if (typeof setSectionNotes === 'function') return setSectionNotes(id, notes);
+  // Fallback (if you don’t have setSectionNotes here):
+  // setSectionDraft(id, (project.sections?.[id]?.draft || '') + '\n\n' + notes);
+}
+
+
+  
   
   return (
     <div className="card">
       <h2>Figures & Tables</h2>
+
+      <div style={{fontSize:12, color:'#667', margin:'4px 0 8px'}}>
+  Preview notes: Images use a <strong>600px thumbnail</strong> (kept small for fast previews). Allowed image formats: <strong>PNG, JPG, SVG</strong>.<br/>
+  Table preview shows the <strong>first 50 rows</strong> for uploaded CSVs (for larger tables, use full export).
+</div>
+      
 
 {/* Propose visuals from manuscript */}
 <div className="card" style={{marginTop:8}}>
@@ -219,6 +318,7 @@ export default function Figures(){
     <button className="btn" onClick={proposeFromManuscript} disabled={vizBusy}>
       {vizBusy ? 'Analyzing…' : 'Propose visuals from manuscript'}
     </button>
+
     <button onClick={()=>setVisualProposals([])} disabled={vizBusy}>Clear proposals</button>
 
   </div>
@@ -322,16 +422,53 @@ export default function Figures(){
               </button>
             </div>
 
-            <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8}}>
+            {/* Preview block */}
+{mode==='figure' && it.thumbDataUrl && (
+  <div style={{marginTop:8}}>
+    <label style={{display:'block', color:'#667'}}>Preview (600px thumbnail)</label>
+    <img src={it.thumbDataUrl} alt={it.name} style={{maxWidth:'600px', width:'100%', border:'1px solid #e5e7eb', borderRadius:8}} />
+  </div>
+)}
+{mode==='table' && Array.isArray(it.sampleRows) && it.sampleRows.length > 0 && (
+  <div style={{marginTop:8}}>
+    <label style={{display:'block', color:'#667'}}>Preview (first 50 rows)</label>
+    <div style={{overflowX:'auto', border:'1px solid #e5e7eb', borderRadius:8}}>
+      <table style={{minWidth:480, borderCollapse:'collapse', fontSize:13}}>
+        <thead>
+          <tr>
+            {(it.columns||[]).map((c,ci)=><th key={ci} style={{textAlign:'left', padding:'6px', borderBottom:'1px solid #e5e7eb'}}>{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {it.sampleRows.map((r,ri)=>(
+            <tr key={ri} style={{borderTop:'1px solid #f1f5f9'}}>
+              {r.map((cell,ci)=><td key={ci} style={{padding:'6px'}}>{cell}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+)}
+
+
+            <<div style={{display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
   <button onClick={()=>autoPlaceItem(mode, it)} disabled={!!placing[it.id]}>
     {placing[it.id] ? 'Analyzing placement…' : 'Auto-placement Assist'}
   </button>
   {!!placements[it.id] && (
-    <span style={{color:'#667'}}>
-      Suggest: {placements[it.id]?.placement?.section || '—'} → after “{(placements[it.id]?.placement?.anchor || '').slice(0,60)}”
-    </span>
+    <>
+      <span style={{color:'#667'}}>
+        Suggest: {placements[it.id]?.placement?.section || '—'} → after “{(placements[it.id]?.placement?.anchor || '').slice(0,60)}…”
+      </span>
+      <button className="btn" onClick={()=>applyPlacement(it, 'token+writeup')}>Insert token + write-up</button>
+      <button onClick={()=>applyPlacement(it, 'token')}>Just token</button>
+      <button onClick={()=>applyPlacement(it, 'notes')}>Just write-up to Notes</button>
+      <span style={{fontSize:12, color:'#667'}}>Default recommended: <strong>Insert token + write-up</strong></span>
+    </>
   )}
 </div>
+
 
           </div>
         ))}
