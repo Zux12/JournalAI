@@ -407,6 +407,82 @@ api.post('/ai/humanize', async (req, res) => {
   }
 });
 
+api.post('/api/ai/generate-tables', async (req, res) => {
+  try {
+    const {
+      title = '',
+      discipline = '',
+      manuscriptSections = [],   // [{ name, text }]
+      count = 2,                 // number of tables to propose
+      length = 'medium'          // 'short'|'medium'|'long' (write-up length)
+    } = req.body || {};
+
+    const sys = 'You are an academic table design assistant. Output JSON ONLY. No prose.';
+    const lenGuide = length === 'short' ? 'one short paragraph (~80-120 words)'
+                    : length === 'long'  ? 'one long paragraph (~300-400 words)'
+                    :                      'one medium paragraph (~180-250 words)';
+
+    const user =
+`Task: Propose ${count} distinct data tables suitable for the Results or Discussion of this manuscript. Tables must be non-overlapping in topic.
+
+Context:
+- Title: ${title}
+- Discipline: ${discipline}
+- Sections (excerpts):
+${manuscriptSections.map(s => `### ${s.name}\n${(s.text||'').slice(0,1200)}`).join('\n\n')}
+
+For each proposed table:
+- Must be UNIQUE in topic vs other proposals.
+- Provide a kebab-case id (e.g., "qds-lod-comparison"), a short title, a caption (mention variables/units).
+- Provide columns array (max 8 columns), and rows (max ~20 rows) with plausible, logical values consistent with the text.
+- If counts/samples/time are natural, pick sensible sizes (e.g., n=3–10; times in mins/hours; realistic magnitudes).
+- Provide placement: section name (e.g., "Results"|"Discussion") and an anchor sentence (exact or short substring) AFTER which to insert the token.
+- Provide ${lenGuide} of write-up text to accompany the table (neutral, no invented claims).
+
+STRICT RULES:
+- NO invented citations or references.
+- Preserve meaning from context; do not contradict the manuscript.
+- Output JSON ONLY with this shape:
+{
+  "tables": [
+    { "id":"string","title":"string","caption":"string","variables":"string",
+      "columns":["col1","col2",...],
+      "rows":[ ["r1c1","r1c2",...], ["r2c1","r2c2",...] ],
+      "placement":{"section":"Results|Discussion","anchor":"string"},
+      "paragraph": "string"
+    }
+  ]
+}`;
+
+    const content = await openaiChat(
+      [{ role: 'system', content: sys }, { role: 'user', content: user }],
+      'gpt-4o-mini',
+      0.4
+    );
+
+    // robust JSON extraction
+    let json = null;
+    try { json = JSON.parse(content); } catch {
+      const m = content.match(/\{[\s\S]*\}$/);
+      json = m ? JSON.parse(m[0]) : null;
+    }
+    if (!json || !Array.isArray(json.tables)) return res.json({ tables: [] });
+
+    // light caps on size
+    const tables = json.tables.slice(0, Math.max(1, Math.min(count, 5))).map(t => ({
+      ...t,
+      columns: Array.isArray(t.columns) ? t.columns.slice(0, 8) : [],
+      rows: Array.isArray(t.rows) ? t.rows.slice(0, 20) : []
+    }));
+    res.json({ tables });
+  } catch (e) {
+    console.error('generate-tables error:', e?.message || e);
+    res.status(500).json({ error: 'generate-tables failed' });
+  }
+});
+
+
+
 app.use('/api', api);
 
 // --- Static (no CORS here) ---
