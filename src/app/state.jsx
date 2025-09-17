@@ -24,7 +24,8 @@ const DEFAULT_PROJECT = {
   sections: {},
   figures: [],
   tables: [],
-  visualProposals: [], // proposed figures/tables from manuscript (persists across navigation)
+  visualProposals: [], // proposed figures/tables (persisted)
+  visualPlacements: {}, // per-item placement suggestions { [id]: { placement, paragraphs } }
   sources: [], // <— NEW: uploaded article PDFs after extraction/OCR
   declarations: { ethicsIRB:'', consent:'', dataAvailability:'', codeAvailability:'', conflicts:'' },
   references: { styleId:'ieee', items:[], unresolved:[] },
@@ -58,9 +59,10 @@ export function ProjectProvider({ children }){
   const setFigures = (figures)=>update(p=>({ ...p, figures }));
   const setTables  = (tables)=>update(p=>({ ...p, tables }));
   const setVisualProposals = (visualProposals)=>update(p=>({ ...p, visualProposals }));
+  const setVisualPlacements = (visualPlacements)=>update(p=>({ ...p, visualPlacements }));
   const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setSources, setReferences };
+  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setSources, setReferences };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
