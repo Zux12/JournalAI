@@ -158,7 +158,9 @@ function stripAiWriteupMarkers(text=''){
 
   
   // ---------- Build sections + refs ----------
-  async function buildPieces(){
+ 
+  async function buildPieces({ forDocx = false } = {}){
+
     const numeric = NUMERIC.has(project.styleId);
     const numMap  = (renumber && numeric) ? collectNumberMap() : null;
 
@@ -176,8 +178,13 @@ function stripAiWriteupMarkers(text=''){
       if (/^abstract$/i.test(s.name) && (project.metadata?.keywords || []).length) {
         txt = (txt || '') + `\n\nKeywords: ${(project.metadata.keywords || []).join('; ')}`;
       }
-      txt = applyFigTabTokens(txt, figMap, tabMap);
-      txt = stripAiWriteupMarkers(txt);
+if (!forDocx) {
+  // In Preview/TXT we render "Figure N"/"Table M"
+  txt = applyFigTabTokens(txt, figMap, tabMap);
+}
+// Always hide write-up markers from what the user sees/exports
+txt = stripAiWriteupMarkers(txt);
+
 
       pieces.push({ title: s.name, text: txt });
     }
@@ -219,9 +226,12 @@ function stripAiWriteupMarkers(text=''){
     return { pieces, refsSimple, refsCSL, listOfFigures, listOfTables };
   }
 
-  async function buildManuscriptText(){
+
+  async function buildManuscriptText(forDocx = false){
+  
     const fm = buildFrontMatter();
-    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces({ forDocx });
+
     const body = pieces.map(p => `# ${p.title}\n\n${p.text}`).join('\n\n');
 
     const lof = listOfFigures?.trim() ? `\n\n# List of Figures\n\n${listOfFigures}` : '';
@@ -333,7 +343,8 @@ function countsSignature(txt=''){
   // DOCX (non-humanized)
   async function exportDocx(){
     try{
-      const text = await buildManuscriptText();
+
+      const text = await buildManuscriptText(true); // keep {fig:ID} tokens for the server to embed images
 const { data } = await axios.post(
   '/api/export/docx',
   { content: text, filename: 'manuscript.docx', figMedia: buildFigMedia() },
@@ -356,7 +367,8 @@ async function humanizeAndDownloadDocx(){
   try{
     setHmStage('Preparing');
     const fm = buildFrontMatter();
-    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
+    const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces({ forDocx: true });
+
 
     const chosen = sectionsForScope();
     const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
