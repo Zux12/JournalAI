@@ -182,41 +182,44 @@ function addItem(files){
     alert(`Inserted token and paragraph into ${p.placement?.section}.`);
   }
 
-  async function autoPlaceItem(kind, item){
-    setPlacing(prev => ({ ...prev, [item.id]: true }));
-    try{
-      const secs = manuscriptSections();
-      const { data } = await axios.post('/api/ai/place-visual', {
-        title: project.metadata?.title || '',
-        discipline: project.metadata?.discipline || '',
-        kind,
-        id: item.id,
-        variables: item.variables || '',
-        notes: item.notes || '',
-        caption: item.caption || '',
-        manuscriptSections: secs,
-        length: 'medium'
+ async function autoPlaceItem(kind, item){
+  setPlacing(prev => ({ ...prev, [item.id]: true }));
+  try{
+    const secs = manuscriptSections();
+    const { data } = await axios.post('/api/ai/place-visual', {
+      title: project.metadata?.title || '',
+      discipline: project.metadata?.discipline || '',
+      kind,
+      id: item.id,
+      variables: item.variables || '',
+      notes: item.notes || '',
+      caption: item.caption || '',
+      manuscriptSections: secs,
+      length: 'medium'
+    });
+
+    if (data?.suggestion) {
+      setPlacements(prev => ({ ...prev, [item.id]: data.suggestion }));
+      update(p => ({
+        ...p,
+        visualPlacements: { ...(p.visualPlacements || {}), [item.id]: data.suggestion }
+      }));
+    } else {
+      setPlacements(prev => ({ ...prev, [item.id]: null }));
+      update(p => {
+        const next = { ...(p.visualPlacements || {}) };
+        delete next[item.id];
+        return { ...p, visualPlacements: next };
       });
- if (data?.suggestion) {
-  setPlacements(prev => ({ ...prev, [item.id]: data.suggestion }));
-  update(p => ({
-    ...p,
-    visualPlacements: { ...(p.visualPlacements || {}), [item.id]: data.suggestion }
-  }));
-} 
- else {
-  setPlacements(prev => ({ ...prev, [item.id]: null }));
-  update(p => {
-    const next = { ...(p.visualPlacements || {}) };
-    delete next[item.id];
-    return { ...p, visualPlacements: next };
-  });
+    }
+  } catch (e) {
+    // On error, clear in-memory placement; leave persisted state unchanged
+    setPlacements(prev => ({ ...prev, [item.id]: null }));
+  } finally {
+    setPlacing(prev => ({ ...prev, [item.id]: false }));
+  }
 }
 
-     finally {
-      setPlacing(prev => ({ ...prev, [item.id]: false }));
-    }
-  }
 
 async function genThumb600(file){
   // SVG: read as text and return data URL directly (no rasterize)
