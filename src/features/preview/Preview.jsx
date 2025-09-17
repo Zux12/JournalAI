@@ -132,6 +132,15 @@ const [hmShowDetails, setHmShowDetails] = React.useState(true);
     return orderKeys;
   }
 
+
+// Remove AI block markers from text (so exports stay clean).
+function stripAiWriteupMarkers(text=''){
+  return String(text)
+    .replace(/\[\[AI-WRITEUP START (fig|tab):[^\]]+\]\]\s*/g, '')
+    .replace(/\s*\[\[AI-WRITEUP END (fig|tab):[^\]]+\]\]/g, '');
+}
+
+  
   // ---------- Build sections + refs ----------
   async function buildPieces(){
     const numeric = NUMERIC.has(project.styleId);
@@ -152,6 +161,8 @@ const [hmShowDetails, setHmShowDetails] = React.useState(true);
         txt = (txt || '') + `\n\nKeywords: ${(project.metadata.keywords || []).join('; ')}`;
       }
       txt = applyFigTabTokens(txt, figMap, tabMap);
+      txt = stripAiWriteupMarkers(txt);
+
       pieces.push({ title: s.name, text: txt });
     }
 
