@@ -455,7 +455,8 @@ function applyPlacement(item, modeSel){
 )}
 
 
-            <<div style={{display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
+<div style={{display:'flex', gap:8, alignItems:'center', marginTop:8, flexWrap:'wrap'}}>
+
   <button onClick={()=>autoPlaceItem(mode, it)} disabled={!!placing[it.id]}>
     {placing[it.id] ? 'Analyzing placement…' : 'Auto-placement Assist'}
   </button>
