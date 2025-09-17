@@ -353,29 +353,123 @@ api.post('/export/docx', async (req, res) => {
       return res.status(400).json({ error: 'No content provided' });
     }
 
-    const { Document, Packer, Paragraph, HeadingLevel, AlignmentType } = require('docx');
+const {
+  Document, Packer, Paragraph, HeadingLevel, AlignmentType,
+  Table, TableRow, TableCell, WidthType
+} = require('docx');
+
+function parseMarkdownTable(mdLines) {
+  // mdLines: array of lines between our markers [[AI-TABLEMD START ...]] and [[AI-TABLEMD END ...]]
+  // Expect GitHub-style pipes. We'll ignore non-table lines defensively.
+  const rows = mdLines
+    .map(l => l.trim())
+    .filter(l => l.startsWith('|') && l.endsWith('|'));
+
+  if (rows.length < 2) return { headers: [], body: [] };
+
+  const header = rows[0].slice(1, -1).split('|').map(s => s.trim());
+  const sep = rows[1]; // | --- | --- |
+  const dataRows = rows.slice(2).map(r => r.slice(1, -1).split('|').map(s => s.trim()));
+
+  return { headers: header, body: dataRows };
+}
+
+function makeDocxTable({ headers, body }) {
+  // Build header row (if present)
+  const headerRow = headers.length
+    ? new TableRow({
+        children: headers.map(h =>
+          new TableCell({
+            children: [ new Paragraph(h) ],
+          })
+        )
+      })
+    : null;
+
+  const bodyRows = body.map(r =>
+    new TableRow({
+      children: r.map(cell =>
+        new TableCell({ children: [ new Paragraph(cell) ] })
+      )
+    })
+  );
+
+  const rows = headerRow ? [headerRow, ...bodyRows] : bodyRows;
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows
+  });
+}
 
 
     // Simple markdown-ish parse: "# " → H1, "## " → H2, otherwise normal para
-    const lines = String(content).split(/\r?\n/);
-    const paras = [];
-    for (let raw of lines) {
-      const line = raw.replace(/\s+$/, '');
-      if (!line.trim()) { paras.push(new Paragraph('')); continue; }
-if (line.startsWith('### ')) {
-  paras.push(new Paragraph({ text: line.slice(4), heading: HeadingLevel.HEADING_3, alignment: AlignmentType.JUSTIFIED }));
-} else if (line.startsWith('## ')) {
-  paras.push(new Paragraph({ text: line.slice(3), heading: HeadingLevel.HEADING_2, alignment: AlignmentType.JUSTIFIED }));
-} else if (line.startsWith('# ')) {
-  paras.push(new Paragraph({ text: line.slice(2), heading: HeadingLevel.HEADING_1, alignment: AlignmentType.JUSTIFIED }));
-} else {
-  paras.push(new Paragraph({ text: line, alignment: AlignmentType.JUSTIFIED }));
-}     
-    }
+// Parse text into DOCX elements (H1/H2/H3, paragraphs, and real tables from [[AI-TABLEMD ...]] blocks)
+const lines = String(content).split(/\r?\n/);
+const children = [];
 
-    const doc = new Document({
-      sections: [{ properties: {}, children: paras }]
-    });
+for (let i = 0; i < lines.length; i++) {
+  let raw = lines[i];
+  let line = raw.replace(/\s+$/, '');
+
+  if (!line.trim()) {
+    children.push(new Paragraph(''));
+    continue;
+  }
+
+  // Table block start?
+  const mdStart = line.match(/^\s*\[\[AI-TABLEMD START (fig|tab):([^\]]+)\]\]\s*$/);
+  if (mdStart) {
+    // Collect lines until END marker
+    const bodyLines = [];
+    let j = i + 1;
+    for (; j < lines.length; j++) {
+      const endMatch = lines[j].match(/^\s*\[\[AI-TABLEMD END (fig|tab):([^\]]+)\]\]\s*$/);
+      if (endMatch) break;
+      bodyLines.push(lines[j]);
+    }
+    // Convert to DOCX Table
+    const parsed = parseMarkdownTable(bodyLines);
+    const table = makeDocxTable(parsed);
+    children.push(table);
+    i = j; // jump to end marker line; loop will i++ to next line
+    continue;
+  }
+
+  // Headings H1/H2/H3
+  if (line.startsWith('### ')) {
+    children.push(new Paragraph({
+      text: line.slice(4),
+      heading: HeadingLevel.HEADING_3,
+      alignment: AlignmentType.JUSTIFIED
+    }));
+    continue;
+  }
+  if (line.startsWith('## ')) {
+    children.push(new Paragraph({
+      text: line.slice(3),
+      heading: HeadingLevel.HEADING_2,
+      alignment: AlignmentType.JUSTIFIED
+    }));
+    continue;
+  }
+  if (line.startsWith('# ')) {
+    children.push(new Paragraph({
+      text: line.slice(2),
+      heading: HeadingLevel.HEADING_1,
+      alignment: AlignmentType.JUSTIFIED
+    }));
+    continue;
+  }
+
+  // Normal paragraph
+  children.push(new Paragraph({ text: line, alignment: AlignmentType.JUSTIFIED }));
+}
+
+const doc = new Document({
+  sections: [{ properties: {}, children }]
+});
+
 
     const buffer = await Packer.toBuffer(doc);
     res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
