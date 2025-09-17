@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
 
 export default function Figures(){
-  const { project, update, setFigures, setTables, setSectionDraft, setVisualProposals, setVisualPlacements } = useProjectState();
+  const { project, update, setFigures, setTables, setSectionDraft, setVisualProposals, setVisualPlacements, setGeneratedTableProposals } = useProjectState();
   const [mode, setMode] = React.useState('figure'); // figure|table
   const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id!=='refs');
 
@@ -16,6 +16,13 @@ export default function Figures(){
   const [vizLen, setVizLen] = React.useState('medium'); // short|medium|long
   const [vizCount, setVizCount] = React.useState(3);
   const proposals = project.visualProposals || [];
+
+  // Generate data tables (panel)
+const [genBusy, setGenBusy] = React.useState(false);
+const [genCount, setGenCount] = React.useState(2);     // how many tables
+const [genLen, setGenLen] = React.useState('medium');  // short|medium|long
+const genTables = project.generatedTableProposals || [];
+
 
   // Per-item placement suggestions
   const [placing, setPlacing] = React.useState({});     // id -> bool
@@ -287,6 +294,66 @@ function applyPlacement(item, modeSel){
 }
 
 
+async function generateTablesFromManuscript(){
+  setGenBusy(true);
+  try{
+    const secs = manuscriptSections();
+    const { data } = await axios.post('/api/ai/generate-tables', {
+      title: project.metadata?.title || '',
+      discipline: project.metadata?.discipline || '',
+      manuscriptSections: secs,
+      count: genCount,
+      length: genLen
+    });
+    setGeneratedTableProposals(Array.isArray(data?.tables) ? data.tables : []);
+  } finally {
+    setGenBusy(false);
+  }
+}
+
+function applyGeneratedTableCreate(t){
+  // ensure unique ID
+  const baseId = t.id && String(t.id).trim() ? t.id : slugId(t.title || 'table');
+  const id = ensureUniqueId(baseId, project.tables || []);
+  const next = [...(project.tables||[]), {
+    id,
+    name: `${id}.csv`,
+    caption: t.caption || '',
+    variables: t.variables || '',
+    notes: '',
+    columns: Array.isArray(t.columns) ? t.columns : [],
+    sampleRows: Array.isArray(t.rows) ? t.rows : []
+  }];
+  setTables(next);
+  alert(`Generated table created: ${id}. Use {tab:${id}} to reference.`);
+}
+
+function applyGeneratedTableInsert(t, modeSel){
+  // modeSel: 'token+writeup' | 'token' | 'notes'
+  // ensure the table exists (create if needed)
+  const existing = (project.tables || []).find(tb => tb.id === t.id);
+  if (!existing) applyGeneratedTableCreate(t);
+
+  const secId = getSectionIdByName(t.placement?.section);
+  if (!secId) return alert('Suggested section not found.');
+
+  const token = `{tab:${t.id}}`;
+  const para  = t.paragraph || '';
+  const current = project.sections?.[secId]?.draft || '';
+
+  if (modeSel === 'notes') {
+    const prevNotes = project.sections?.[secId]?.notes || '';
+    const combined = prevNotes ? (prevNotes + '\n\n' + para) : para;
+    setSectionNotesFor(secId, combined);
+    return alert('Write-up added to Notes for this section.');
+  }
+
+  const insertion = modeSel === 'token+writeup' ? (token + (para ? `\n\n${para}` : '')) : token;
+  const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
+  setSectionDraft(secId, next);
+  alert('Inserted generated table into draft.');
+}
+
   
   
   return (
@@ -482,6 +549,85 @@ function applyPlacement(item, modeSel){
           </div>
         )}
       </div>
+
+
+      {/* Generate data tables (AI) */}
+<div className="card" style={{marginTop:16}}>
+  <h3>Generate data tables from manuscript</h3>
+  <div style={{fontSize:12, color:'#667', margin:'4px 0 10px'}}>
+    AI will propose distinct tables with plausible values based on your Results/Discussion. Review before inserting.
+  </div>
+  <div style={{display:'flex', gap:12, alignItems:'end', flexWrap:'wrap'}}>
+    <div>
+      <label>Count</label>
+      <select className="input" value={genCount} onChange={e=>setGenCount(Number(e.target.value)||2)}>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+      </select>
+    </div>
+    <div>
+      <label>Write-up length</label>
+      <select className="input" value={genLen} onChange={e=>setGenLen(e.target.value)}>
+        <option value="short">Short</option>
+        <option value="medium">Medium</option>
+        <option value="long">Long</option>
+      </select>
+    </div>
+    <button className="btn" onClick={generateTablesFromManuscript} disabled={genBusy}>
+      {genBusy ? 'Generating…' : 'Generate tables'}
+    </button>
+    <button onClick={()=>setGeneratedTableProposals([])} disabled={genBusy}>Clear</button>
+  </div>
+
+  {/* Proposals list */}
+  {genTables.length > 0 && (
+    <div style={{marginTop:10}}>
+      {genTables.map((t, i)=>(
+        <div key={i} className="card" style={{padding:'12px'}}>
+          <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+            <span className="badge">Table</span>
+            <strong>{t.title || '(untitled)'}</strong>
+            <code style={{opacity:.7}}>{t.id}</code>
+            <span style={{marginLeft:'auto', color:'#667'}}>Place: {t.placement?.section || '—'} → after “{(t.placement?.anchor || '').slice(0,80)}”</span>
+          </div>
+
+          {/* Table preview */}
+          <div style={{marginTop:8, overflowX:'auto', border:'1px solid #e5e7eb', borderRadius:8}}>
+            <table style={{minWidth:480, borderCollapse:'collapse', fontSize:13}}>
+              <thead>
+                <tr>
+                  {(t.columns||[]).map((c,ci)=><th key={ci} style={{textAlign:'left', padding:'6px', borderBottom:'1px solid #e5e7eb'}}>{c}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {(t.rows||[]).map((r,ri)=>(
+                  <tr key={ri} style={{borderTop:'1px solid #f1f5f9'}}>
+                    {r.map((cell,ci)=><td key={ci} style={{padding:'6px'}}>{cell}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{marginTop:6, color:'#111'}}><em>Caption:</em> {t.caption || '—'}</div>
+          <div style={{marginTop:6, color:'#111'}}><em>Variables:</em> {t.variables || '—'}</div>
+          <div style={{marginTop:6, whiteSpace:'pre-wrap'}}>{t.paragraph || ''}</div>
+
+          <div style={{display:'flex', gap:8, marginTop:8, flexWrap:'wrap'}}>
+            <button className="btn" onClick={()=>{ applyGeneratedTableCreate(t); }}>Create table only</button>
+            <button onClick={()=>{ applyGeneratedTableInsert(t, 'token') }}>Insert token only</button>
+            <button className="btn" onClick={()=>{ applyGeneratedTableInsert(t, 'token+writeup') }}>Create + insert token + write-up</button>
+            <button onClick={()=>{ applyGeneratedTableInsert(t, 'notes') }}>Write-up to Notes</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+
+      
+      
     </div>
   );
 }
