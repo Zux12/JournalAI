@@ -407,7 +407,9 @@ api.post('/ai/humanize', async (req, res) => {
   }
 });
 
-api.post('/api/ai/generate-tables', async (req, res) => {
+
+api.post('/ai/generate-tables', async (req, res) => {
+
   try {
     const {
       title = '',
