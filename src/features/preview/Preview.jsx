@@ -65,6 +65,16 @@ const [hmTotal, setHmTotal] = React.useState(0);      // total sections to proce
 const [hmDetails, setHmDetails] = React.useState([]); // [{id,name,status}] status: pending/humanizing/done/fallback
 const [hmShowDetails, setHmShowDetails] = React.useState(true);
 
+function buildFigMedia(){
+  const map = {};
+  (project.figures || []).forEach(f => {
+    // We embed the 600px thumbnail if available; caption is included.
+    if (f.thumbDataUrl) {
+      map[f.id] = { dataUrl: f.thumbDataUrl, caption: f.caption || '' };
+    }
+  });
+  return map;
+}
 
   // ---------- Front matter ----------
   function buildFrontMatter(){
@@ -324,11 +334,11 @@ function countsSignature(txt=''){
   async function exportDocx(){
     try{
       const text = await buildManuscriptText();
-      const { data } = await axios.post(
-        '/api/export/docx',
-        { content: text, filename: 'manuscript.docx' },
-        { responseType: 'arraybuffer' }
-      );
+const { data } = await axios.post(
+  '/api/export/docx',
+  { content: text, filename: 'manuscript.docx', figMedia: buildFigMedia() },
+  { responseType: 'arraybuffer' }
+);
       const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = 'manuscript.docx';
@@ -392,10 +402,11 @@ async function humanizeAndDownloadDocx(){
 
     setHmStage('Generating');
     const { data } = await axios.post(
-      '/api/export/docx',
-      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx` },
-      { responseType: 'arraybuffer' }
-    );
+  '/api/export/docx',
+  { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx`, figMedia: buildFigMedia() },
+  { responseType: 'arraybuffer' }
+);
+
     const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
