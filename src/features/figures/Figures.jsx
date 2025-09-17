@@ -1,9 +1,20 @@
 import React from 'react';
 import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
+import { useNavigate } from 'react-router-dom';
+
 
 export default function Figures(){
   const { project, update, setFigures, setTables, setSectionDraft, setVisualProposals, setVisualPlacements, setGeneratedTableProposals } = useProjectState();
+  const nav = useNavigate();
+  const [coverage, setCoverage] = React.useState({ uncitedFigures: [], uncitedTables: [], orphanMentions: [] });
+    React.useEffect(()=>{
+    setCoverage(scanTokenCoverage());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.updatedAt]);
+
+
+  
   const [mode, setMode] = React.useState('figure'); // figure|table
   const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id!=='refs');
 
@@ -116,6 +127,44 @@ function addItem(files){
     }
   }
 
+// --- Orphan checker helpers ---
+function scanTokenCoverage(){
+  const figs = (project.figures || []).map(f => f.id);
+  const tabs = (project.tables  || []).map(t => t.id);
+  const sections = (project.planner?.sections || []).filter(s=>!s.skipped && s.id!=='refs');
+
+  // Join all drafts as text
+  const drafts = sections.map(s => ({ id:s.id, name:s.name, text: String(project.sections?.[s.id]?.draft || '') }));
+
+  // Token presence
+  const hasFig = new Set();
+  const hasTab = new Set();
+  for (const d of drafts) {
+    for (const id of figs) if (d.text.includes(`{fig:${id}}`)) hasFig.add(id);
+    for (const id of tabs) if (d.text.includes(`{tab:${id}}`)) hasTab.add(id);
+  }
+
+  const uncitedFigures = figs.filter(id => !hasFig.has(id));
+  const uncitedTables  = tabs.filter(id => !hasTab.has(id));
+
+  // Orphan mentions (heuristic): sections that mention "Figure"/"Table" but contain no tokens at all
+  const orphanMentions = [];
+  for (const d of drafts) {
+    const hasAnyToken = /\{fig:|\{tab:/.test(d.text);
+    const mentionsFigure = /Figure\s+\d+/i.test(d.text) || /Figure\s+/i.test(d.text);
+    const mentionsTable  = /Table\s+\d+/i.test(d.text)  || /Table\s+/i.test(d.text);
+    if (!hasAnyToken && (mentionsFigure || mentionsTable)) {
+      // take a short snippet
+      const snippet = (d.text.match(/(?:Figure|Table)[^.\n]{0,120}/i) || ['…'])[0];
+      orphanMentions.push({ sectionId:d.id, sectionName:d.name, snippet });
+    }
+  }
+
+  return { uncitedFigures, uncitedTables, orphanMentions };
+}
+
+
+  
   const list = mode==='figure' ? figs : tabs;
 
   function manuscriptSections() {
@@ -438,7 +487,85 @@ This cannot be undone automatically. Continue?`;
   Preview notes: Images use a <strong>600px thumbnail</strong> (kept small for fast previews). Allowed image formats: <strong>PNG, JPG, SVG</strong>.<br/>
   Table preview shows the <strong>first 50 rows</strong> for uploaded CSVs (for larger tables, use full export).
 </div>
+
+
+{/* Orphan checker summary */}
+{coverage && (
+  <div className="card" style={{marginBottom:8}}>
+    <div style={{display:'flex', gap:16, flexWrap:'wrap'}}>
+      <div>Uncited figures: <strong>{coverage.uncitedFigures.length}</strong></div>
+      <div>Uncited tables: <strong>{coverage.uncitedTables.length}</strong></div>
+      <div>Orphan mentions: <strong>{coverage.orphanMentions.length}</strong></div>
+    </div>
+
+    {/* Lists */}
+    {(coverage.uncitedFigures.length > 0 || coverage.uncitedTables.length > 0) && (
+      <div style={{marginTop:8}}>
+        {coverage.uncitedFigures.length > 0 && (
+          <div style={{marginTop:6}}>
+            <strong>Uncited figures</strong>
+            {coverage.uncitedFigures.map(id => (
+              <div key={id} style={{display:'flex', gap:8, alignItems:'center', marginTop:4}}>
+                <code>{id}</code>
+                <button onClick={()=>copyToken('figure', id)}>Copy token</button>
+                <select id={`orphan-fig-${id}`} className="input" style={{width:220}}>
+                  <option value="">Jump to section…</option>
+                  {(project.planner?.sections || []).filter(s=>!s.skipped && s.id!=='refs').map(s=>
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  )}
+                </select>
+                <button onClick={()=>{
+                  const sel = document.getElementById(`orphan-fig-${id}`);
+                  const secId = sel?.value;
+                  if (secId) nav(`/qa/${secId}`);
+                }}>Open</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {coverage.uncitedTables.length > 0 && (
+          <div style={{marginTop:10}}>
+            <strong>Uncited tables</strong>
+            {coverage.uncitedTables.map(id => (
+              <div key={id} style={{display:'flex', gap:8, alignItems:'center', marginTop:4}}>
+                <code>{id}</code>
+                <button onClick={()=>copyToken('table', id)}>Copy token</button>
+                <select id={`orphan-tab-${id}`} className="input" style={{width:220}}>
+                  <option value="">Jump to section…</option>
+                  {(project.planner?.sections || []).filter(s=>!s.skipped && s.id!=='refs').map(s=>
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  )}
+                </select>
+                <button onClick={()=>{
+                  const sel = document.getElementById(`orphan-tab-${id}`);
+                  const secId = sel?.value;
+                  if (secId) nav(`/qa/${secId}`);
+                }}>Open</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+
+    {coverage.orphanMentions.length > 0 && (
+      <div style={{marginTop:10}}>
+        <strong>Orphan mentions (no tokens in section)</strong>
+        {coverage.orphanMentions.map((o,i)=>(
+          <div key={i} style={{display:'flex', gap:8, alignItems:'center', marginTop:4}}>
+            <span style={{color:'#667'}}>{o.sectionName}:</span>
+            <span style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:360}} title={o.snippet}>{o.snippet || '…'}</span>
+            <button onClick={()=>nav(`/qa/${o.sectionId}`)}>Open</button>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+)}
+
       
+
 
 {/* Propose visuals from manuscript */}
 <div className="card" style={{marginTop:8}}>
