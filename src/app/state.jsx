@@ -26,6 +26,8 @@ const DEFAULT_PROJECT = {
   tables: [],
   visualProposals: [], // proposed figures/tables (persisted)
   visualPlacements: {}, // per-item placement suggestions { [id]: { placement, paragraphs } }
+  generatedTableProposals: [], // AI-generated table proposals (persisted)
+
   sources: [], // <— NEW: uploaded article PDFs after extraction/OCR
   declarations: { ethicsIRB:'', consent:'', dataAvailability:'', codeAvailability:'', conflicts:'' },
   references: { styleId:'ieee', items:[], unresolved:[] },
@@ -60,6 +62,7 @@ export function ProjectProvider({ children }){
   const setTables  = (tables)=>update(p=>({ ...p, tables }));
   const setVisualProposals = (visualProposals)=>update(p=>({ ...p, visualProposals }));
   const setVisualPlacements = (visualPlacements)=>update(p=>({ ...p, visualPlacements }));
+  const setGeneratedTableProposals = (generatedTableProposals)=>update(p=>({ ...p, generatedTableProposals }));
   const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
   const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setSources, setReferences };
