@@ -183,7 +183,11 @@ function addItem(files){
     if (!secId) return alert('Suggested section not found.');
     const token = p.kind === 'table' ? `{tab:${p.id}}` : `{fig:${p.id}}`;
     const existing = project.sections?.[secId]?.draft || '';
-    const insertion = `${token}\n\n${(p.paragraphs && p.paragraphs[0]) || ''}`.trim();
+const kindTag = p.kind === 'table' ? 'tab' : 'fig';
+const para = (p.paragraphs && p.paragraphs[0]) || '';
+const marked = para ? `[[AI-WRITEUP START ${kindTag}:${p.id}]]\n${para}\n[[AI-WRITEUP END ${kindTag}:${p.id}]]` : '';
+const insertion = `${token}${marked ? `\n\n${marked}` : ''}`;
+
     const next = insertAfterAnchor(existing, p.placement?.anchor, insertion);
     setSectionDraft(secId, next);
     alert(`Inserted token and paragraph into ${p.placement?.section}.`);
@@ -271,15 +275,19 @@ function applyPlacement(item, modeSel){
   const existing = project.sections?.[secId]?.draft || '';
 
   let insertion = '';
-  if (modeSel === 'token+writeup') insertion = (token + (para ? `\n\n${para}` : ''));
-  else if (modeSel === 'token') insertion = token;
-  else if (modeSel === 'notes') {
-    // notes only → do not alter draft, append to Notes for that section (so user can approve later)
-    const prevNotes = project.sections?.[secId]?.notes || '';
-    const combined = prevNotes ? (prevNotes + '\n\n' + para) : para;
-    setSectionNotesFor(secId, combined);
-    return alert('Write-up added to Notes for this section.');
-  }
+if (modeSel === 'token+writeup') {
+  const kindTag = mode === 'table' ? 'tab' : 'fig';
+  const marked = para ? `[[AI-WRITEUP START ${kindTag}:${item.id}]]\n${para}\n[[AI-WRITEUP END ${kindTag}:${item.id}]]` : '';
+  insertion = token + (marked ? `\n\n${marked}` : '');
+} else if (modeSel === 'token') {
+  insertion = token;
+} else if (modeSel === 'notes') {
+  const prevNotes = project.sections?.[secId]?.notes || '';
+  const combined = prevNotes ? (prevNotes + '\n\n' + para) : para;
+  setSectionNotesFor(secId, combined);
+  return alert('Write-up added to Notes for this section.');
+}
+
 
   const next = insertAfterAnchor(existing, sugg.placement?.anchor, insertion);
   setSectionDraft(secId, next);
@@ -348,10 +356,76 @@ function applyGeneratedTableInsert(t, modeSel){
     return alert('Write-up added to Notes for this section.');
   }
 
-  const insertion = modeSel === 'token+writeup' ? (token + (para ? `\n\n${para}` : '')) : token;
+const kindTag = 'tab';
+const marked = para ? `[[AI-WRITEUP START ${kindTag}:${t.id}]]\n${para}\n[[AI-WRITEUP END ${kindTag}:${t.id}]]` : '';
+const insertion = modeSel === 'token+writeup' ? (token + (marked ? `\n\n${marked}` : '')) : token;
+
   const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
   setSectionDraft(secId, next);
   alert('Inserted generated table into draft.');
+}
+
+
+  function escapeRegExp(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function removeTokensAndAiBlocks(text, kind, id){
+  let out = String(text || '');
+  const tag = kind === 'table' ? 'tab' : 'fig';
+
+  // Remove AI write-up block(s) for this id
+  const start = new RegExp(`\\[\\[AI-WRITEUP START ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
+  const end   = new RegExp(`\\[\\[AI-WRITEUP END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
+  // Remove everything from START to END, non-greedy
+  const block = new RegExp(`\\[\\[AI-WRITEUP START ${tag}:${escapeRegExp(id)}\\]\\][\\s\\S]*?\\[\\[AI-WRITEUP END ${tag}:${escapeRegExp(id)}\\]\\]`, 'g');
+  out = out.replace(block, '');
+
+  // Remove tokens for this id
+  const tokenRe = new RegExp(`\\{${tag}:${escapeRegExp(id)}\\}`, 'g');
+  out = out.replace(tokenRe, '');
+
+  // Collapse excessive blank lines (max 2)
+  out = out.replace(/\n{3,}/g, '\n\n');
+
+  return out.trim();
+}
+
+function deleteItemCascade(kind, id){
+  const isFigure = (kind === 'figure');
+  const label = isFigure ? 'figure' : 'table';
+  const confirmMsg =
+`Delete ${label} “${id}”?
+This will also remove:
+• All {${isFigure?'fig':'tab'}:${id}} tokens in the manuscript
+• AI-inserted write-ups associated with this ${label}
+
+This cannot be undone automatically. Continue?`;
+  if (!confirm(confirmMsg)) return;
+
+  // 1) Remove item from library
+  if (isFigure) {
+    setFigures((project.figures || []).filter(f => f.id !== id));
+  } else {
+    setTables((project.tables || []).filter(t => t.id !== id));
+  }
+
+  // 2) Clear persisted placement suggestion for this item
+  update(p => {
+    const vp = { ...(p.visualPlacements || {}) };
+    delete vp[id];
+    return { ...p, visualPlacements: vp };
+  });
+
+  // 3) Scrub tokens + AI blocks from all section drafts
+  const order = (project.planner?.sections || []).filter(s=>!s.skipped && s.id!=='refs');
+  for (const s of order) {
+    const draft = project.sections?.[s.id]?.draft || '';
+    const scrub = removeTokensAndAiBlocks(draft, kind, id);
+    if (scrub !== draft) {
+      setSectionDraft(s.id, scrub);
+    }
+  }
+
+  alert(`Deleted ${label} and cleaned related tokens/write-ups.`);
 }
 
   
@@ -450,6 +524,10 @@ function applyGeneratedTableInsert(t, modeSel){
                   const sel = document.getElementById(`sec-${mode}-${it.id}`);
                   if (sel?.value) insertIntoSection(mode, it.id, sel.value);
                 }}>Insert</button>
+                <button
+    style={{color:'#b91c1c', border:'1px solid #fecaca', background:'#fee2e2'}}
+    onClick={()=>deleteItemCascade(mode, it.id)}
+  >Delete</button>
               </div>
             </div>
 
