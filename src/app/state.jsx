@@ -34,6 +34,16 @@ const DEFAULT_PROJECT = {
   settings: { humanize:'off', warnOnSkip:true }
 };
 
+function freshProject(){
+  // Deep clone DEFAULT_PROJECT and refresh timestamps
+  const base = JSON.parse(JSON.stringify(DEFAULT_PROJECT));
+  const now = new Date().toISOString();
+  base.createdAt = now;
+  base.updatedAt = now;
+  return base;
+}
+
+
 const KEY = 'journalai.project';
 
 function readProject(){
@@ -53,6 +63,7 @@ export function ProjectProvider({ children }){
   const update = React.useCallback(fn => setProject(prev => writeProject(fn(prev))), []);
   const setStyleId = (styleId)=>update(p=>({ ...p, styleId }));
   const setMetadata = (metadata)=>update(p=>({ ...p, metadata }));
+  const resetProject = ()=> setProject(writeProject(freshProject()));
   const setPlanner = (planner)=>update(p=>({ ...p, planner }));
   const setSectionDraft = (id, draft)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), draft } } }));
   const setSectionDraftRaw = (id, draftRaw)=>update(p=>({ ...p, sections: { ...p.sections, [id]: { ...(p.sections[id]||{}), draftRaw } } }));
@@ -65,7 +76,7 @@ export function ProjectProvider({ children }){
   const setGeneratedTableProposals = (generatedTableProposals)=>update(p=>({ ...p, generatedTableProposals }));
   const setReferences = (refs)=>update(p=>({ ...p, references: refs }));
   const setSources = (sources)=>update(p=>({ ...p, sources })); // <— NEW   
-  const value = { project, update, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setGeneratedTableProposals, setSources, setReferences };
+  const value = { project, update, resetProject, setStyleId, setMetadata, setPlanner, setSectionDraft, setSectionDraftRaw, setSectionNotes, setSectionCitedKeys, setFigures, setTables, setVisualProposals, setVisualPlacements, setGeneratedTableProposals, setSources, setReferences };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
