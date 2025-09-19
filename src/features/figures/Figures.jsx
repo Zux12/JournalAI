@@ -394,7 +394,7 @@ function applyGeneratedTableCreate(t){
   alert(`Generated table created: ${id}. Use {tab:${id}} to reference.`);
 }
 
-function applyGeneratedTableInsert(t, modeSel){
+async applyGeneratedTableInsert(t, modeSel){
   // modeSel: 'token+writeup' | 'token' | 'notes'
   // ensure the table exists (create if needed)
   const existing = (project.tables || []).find(tb => tb.id === t.id);
@@ -527,8 +527,7 @@ function insertTableMarkdownIntoDraft(secId, anchor, mdTable, token, withWriteup
   setSectionDraft(secId, next);
 }
 
-
-function insertGeneratedTableMarkdown(t, withWriteup) {
+async function insertGeneratedTableMarkdown(t, withWriteup) {
   // ensure table exists in library
   const exists = (project.tables || []).find(tb => tb.id === t.id);
   if (!exists) applyGeneratedTableCreate(t);
