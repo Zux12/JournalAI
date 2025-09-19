@@ -276,22 +276,30 @@ async function humanizeAndDownload(){
     for (let i = 0; i < chosen.length; i++) {
       if (hmCancel) break;
       const sec = chosen[i];
-      setHmIndex(i);
-      setHmDetails(prev => prev.map(d =>
-        d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
-      ));
+     setHmIndex(i);
+setHmDetails(prev => prev.map(d =>
+  d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
+));
 
-     const prot = protectCitationsText(original);
+// define original BEFORE try/catch
+const original = piecesByTitle.get(sec.name) || '';
+const sigBefore = countsSignature(original);
+
+// protect cites, then send to AI
+const prot = protectCitationsText(original);
+
 try{
   const { data } = await axios.post('/api/ai/humanize', {
     text: `# ${sec.name}\n\n${prot.text}`,
     level: humanizeLevel
   });
-  const raw = (data && typeof data.text==='string')
+
+  // strip heading the model might echo
+  const raw = (data && typeof data.text === 'string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
 
-  // Restore citations BEFORE checking signature
+  // restore cites BEFORE signature check
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
@@ -299,16 +307,17 @@ try{
 
   out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
   setHmDetails(prev => prev.map(d =>
-    d.id===sec.name
+    d.id === sec.name
       ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
       : d
   ));
 } catch (e) {
   out.push(`# ${sec.name}\n\n${original}`);
   setHmDetails(prev => prev.map(d =>
-    d.id===sec.name ? { ...d, status:'fallback', reason:'ai-error' } : d
+    d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
   ));
 }
+
 
     }
 
@@ -440,21 +449,30 @@ async function humanizeAndDownloadDocx(){
     for (let i = 0; i < chosen.length; i++) {
       if (hmCancel) break;
       const sec = chosen[i];
-      setHmIndex(i);
-      setHmDetails(prev => prev.map(d =>
-        d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
-      ));
+setHmIndex(i);
+setHmDetails(prev => prev.map(d =>
+  d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
+));
 
-      const prot = protectCitationsText(original);
+// define original BEFORE try/catch
+const original = piecesByTitle.get(sec.name) || '';
+const sigBefore = countsSignature(original);
+
+// protect cites, then send to AI
+const prot = protectCitationsText(original);
+
 try{
   const { data } = await axios.post('/api/ai/humanize', {
     text: `# ${sec.name}\n\n${prot.text}`,
     level: humanizeLevel
   });
-  const raw = (data && typeof data.text==='string')
+
+  // strip heading the model might echo
+  const raw = (data && typeof data.text === 'string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
 
+  // restore cites BEFORE signature check
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
@@ -462,16 +480,17 @@ try{
 
   out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
   setHmDetails(prev => prev.map(d =>
-    d.id===sec.name
+    d.id === sec.name
       ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
       : d
   ));
 } catch (e) {
   out.push(`# ${sec.name}\n\n${original}`);
   setHmDetails(prev => prev.map(d =>
-    d.id===sec.name ? { ...d, status:'fallback', reason:'ai-error' } : d
+    d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
   ));
 }
+
 
     }
 
