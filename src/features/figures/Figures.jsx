@@ -362,12 +362,18 @@ async function generateTablesFromManuscript(){
       count: genCount,
       length: genLen
     });
-    setGeneratedTableProposals(Array.isArray(data?.tables) ? data.tables : []);
+    const list = Array.isArray(data?.tables) ? data.tables : [];
+    if (!list.length && data?.error) {
+      alert('AI could not generate tables right now. Please try again.\n(error: ' + data.error + ')');
+    }
+    setGeneratedTableProposals(list);
   } finally {
     setGenBusy(false);
   }
 }
 
+
+  
 function applyGeneratedTableCreate(t){
   // ensure unique ID
   const baseId = t.id && String(t.id).trim() ? t.id : slugId(t.title || 'table');
