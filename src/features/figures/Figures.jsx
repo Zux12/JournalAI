@@ -440,6 +440,42 @@ async function applyGeneratedTableInsert(t, modeSel){
   }
 }
 
+  
+function deleteGeneratedProposalCascade(t){
+  const id = t?.id;
+  if (!id) return;
+
+  const ok = confirm(
+    `Delete generated table “${id}”? This will also remove:\n` +
+    `• All {tab:${id}} tokens in the manuscript\n` +
+    `• Any AI-inserted write-ups and AI table-markdown blocks for this table\n` +
+    `• Any created table item with this id`
+  );
+  if (!ok) return;
+
+  // 1) Remove from proposals
+  setGeneratedTableProposals((project.generatedTableProposals || []).filter(p => p.id !== id));
+
+  // 2) Remove from Tables library (if already created)
+  setTables((project.tables || []).filter(tb => tb.id !== id));
+
+  // 3) Clear persisted placement suggestion for this id
+  update(p => {
+    const vp = { ...(p.visualPlacements || {}) };
+    delete vp[id];
+    return { ...p, visualPlacements: vp };
+  });
+
+  // 4) Scrub tokens + AI blocks from all section drafts
+  const sections = (project.planner?.sections || []).filter(s => !s.skipped && s.id !== 'refs');
+  for (const s of sections) {
+    const draft = project.sections?.[s.id]?.draft || '';
+    const scrub = removeTokensAndAiBlocks(draft, 'table', id); // removes {tab:id}, [[AI-WRITEUP …]], [[AI-TABLEMD …]]
+    if (scrub !== draft) setSectionDraft(s.id, scrub);
+  }
+
+  alert('Deleted generated table proposal and cleaned related tokens/write-ups.');
+}
 
 
   function escapeRegExp(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -960,7 +996,14 @@ async function resolveCitationsAndFormat(citeIds = []){
   <button onClick={()=>{ applyGeneratedTableInsert(t, 'notes') }}>Write-up to Notes</button>
   <button className="btn" onClick={()=>{ insertGeneratedTableMarkdown(t, true) }}>Insert table (Markdown) + token + write-up</button>
   <button onClick={()=>{ insertGeneratedTableMarkdown(t, false) }}>Insert table (Markdown) only</button>
+  <button
+    style={{color:'#b91c1c', border:'1px solid #fecaca', background:'#fee2e2'}}
+    onClick={()=>deleteGeneratedProposalCascade(t)}
+  >
+    Delete proposal + associates
+  </button>
 </div>
+
 
         </div>
       ))}
