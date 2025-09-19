@@ -2,6 +2,9 @@ import React from 'react';
 import axios from 'axios';
 import { useProjectState } from '../../app/state.jsx';
 import { useNavigate } from 'react-router-dom';
+import { fetchByDOI, fetchByPMID, fetchByArXiv } from '../../lib/refs.js';
+import { mergeReferences, ensureRefIds, formatInText } from '../../lib/refFormat.js';
+
 
 
 export default function Figures(){
@@ -401,8 +404,9 @@ function applyGeneratedTableInsert(t, modeSel){
   if (!secId) return alert('Suggested section not found.');
 
   const token = `{tab:${t.id}}`;
-  const para  = t.paragraph || '';
-  const current = project.sections?.[secId]?.draft || '';
+let para  = t.paragraph || '';
+const current = project.sections?.[secId]?.draft || '';
+
 
   if (modeSel === 'notes') {
     const prevNotes = project.sections?.[secId]?.notes || '';
@@ -412,8 +416,19 @@ function applyGeneratedTableInsert(t, modeSel){
   }
 
 const kindTag = 'tab';
-const marked = para ? `[[AI-WRITEUP START ${kindTag}:${t.id}]]\n${para}\n[[AI-WRITEUP END ${kindTag}:${t.id}]]` : '';
-const insertion = modeSel === 'token+writeup' ? (token + (marked ? `\n\n${marked}` : '')) : token;
+if (modeSel === 'token+writeup') {
+  let intext = '';
+  if (Array.isArray(t.citations) && t.citations.length) {
+    intext = await resolveCitationsAndFormat(t.citations);
+  }
+  const paraWithCite = para + (intext ? ` ${intext}` : '');
+  const marked = paraWithCite ? `[[AI-WRITEUP START ${kindTag}:${t.id}]]\n${paraWithCite}\n[[AI-WRITEUP END ${kindTag}:${t.id}]]` : '';
+  const insertion = token + (marked ? `\n\n${marked}` : '');
+  const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
+  setSectionDraft(secId, next);
+  return alert('Inserted generated table into draft.');
+}
+
 
   const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
   setSectionDraft(secId, next);
@@ -523,11 +538,53 @@ function insertGeneratedTableMarkdown(t, withWriteup) {
 
   const token = `{tab:${t.id}}`;
   const md = toMarkdownTable(t.columns || [], t.rows || []);
-  const para = t.paragraph || '';
-  insertTableMarkdownIntoDraft(secId, t.placement?.anchor, md, token, withWriteup, 'tab', t.id, para);
+let para = t.paragraph || '';
+let intext = '';
+if (withWriteup && Array.isArray(t.citations) && t.citations.length) {
+  intext = await resolveCitationsAndFormat(t.citations);
+}
+const paraWithCite = withWriteup ? (para + (intext ? ` ${intext}` : '')) : '';
+insertTableMarkdownIntoDraft(secId, t.placement?.anchor, md, token, withWriteup, 'tab', t.id, paraWithCite);
+
   alert(withWriteup ? 'Table markdown + token + write-up inserted.' : 'Table markdown inserted.');
 }
-  
+
+
+async function resolveCitationsAndFormat(citeIds = []){
+  const ids = Array.from(new Set((citeIds || []).map(s => String(s||'').trim()).filter(Boolean)));
+  if (!ids.length) return '';
+
+  // Resolve identifiers to CSL-JSON
+  const newRefs = [];
+  for (const token of ids) {
+    const low = token.toLowerCase();
+    try{
+      if (low.startsWith('doi:') || /^10\.\d{4,9}\//.test(low)) {
+        const doi = low.replace(/^doi:/,'');
+        newRefs.push(await fetchByDOI(doi));
+      } else if (low.startsWith('pmid:')) {
+        newRefs.push(await fetchByPMID(low.replace(/^pmid:/,'')));
+      } else if (low.startsWith('arxiv:') || /^\d{4}\.\d{4,5}(v\d+)?$/.test(low)) {
+        newRefs.push(await fetchByArXiv(low.replace(/^arxiv:/,'')));
+      }
+    }catch(e){ /* ignore failures per id */ }
+  }
+  if (!newRefs.length) return '';
+
+  // Merge into project.references and build in-text
+  let refsAfter = null;
+  let keysUsed = [];
+  update(p => {
+    const merged = mergeReferences(p.references, newRefs);
+    refsAfter = merged;
+    keysUsed = ensureRefIds(newRefs).map(r => (r.DOI ? `doi:${String(r.DOI).toLowerCase()}` : (r.id || r.title || '')).toLowerCase());
+    return { ...p, references: merged };
+  });
+
+  const intext = formatInText(project.styleId, refsAfter, keysUsed);
+  return intext || '';
+}
+
   
   
   return (
