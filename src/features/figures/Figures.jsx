@@ -394,7 +394,9 @@ function applyGeneratedTableCreate(t){
   alert(`Generated table created: ${id}. Use {tab:${id}} to reference.`);
 }
 
-async applyGeneratedTableInsert(t, modeSel){
+
+async function applyGeneratedTableInsert(t, modeSel){
+
   // modeSel: 'token+writeup' | 'token' | 'notes'
   // ensure the table exists (create if needed)
   const existing = (project.tables || []).find(tb => tb.id === t.id);
@@ -404,9 +406,8 @@ async applyGeneratedTableInsert(t, modeSel){
   if (!secId) return alert('Suggested section not found.');
 
   const token = `{tab:${t.id}}`;
-let para  = t.paragraph || '';
-const current = project.sections?.[secId]?.draft || '';
-
+  let para  = t.paragraph || '';
+  const current = project.sections?.[secId]?.draft || '';
 
   if (modeSel === 'notes') {
     const prevNotes = project.sections?.[secId]?.notes || '';
@@ -415,25 +416,30 @@ const current = project.sections?.[secId]?.draft || '';
     return alert('Write-up added to Notes for this section.');
   }
 
-const kindTag = 'tab';
-if (modeSel === 'token+writeup') {
-  let intext = '';
-  if (Array.isArray(t.citations) && t.citations.length) {
-    intext = await resolveCitationsAndFormat(t.citations);
+  const kindTag = 'tab';
+  if (modeSel === 'token+writeup') {
+    let intext = '';
+    if (Array.isArray(t.citations) && t.citations.length) {
+      intext = await resolveCitationsAndFormat(t.citations);
+    }
+    const paraWithCite = para + (intext ? ` ${intext}` : '');
+    const marked = paraWithCite
+      ? `[[AI-WRITEUP START ${kindTag}:${t.id}]]\n${paraWithCite}\n[[AI-WRITEUP END ${kindTag}:${t.id}]]`
+      : '';
+    const insertion = token + (marked ? `\n\n${marked}` : '');
+    const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
+    setSectionDraft(secId, next);
+    return alert('Inserted generated table into draft.');
   }
-  const paraWithCite = para + (intext ? ` ${intext}` : '');
-  const marked = paraWithCite ? `[[AI-WRITEUP START ${kindTag}:${t.id}]]\n${paraWithCite}\n[[AI-WRITEUP END ${kindTag}:${t.id}]]` : '';
-  const insertion = token + (marked ? `\n\n${marked}` : '');
-  const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
-  setSectionDraft(secId, next);
-  return alert('Inserted generated table into draft.');
+
+  if (modeSel === 'token') {
+    const insertion = token;
+    const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
+    setSectionDraft(secId, next);
+    return alert('Inserted generated table token.');
+  }
 }
 
-
-  const next = insertAfterAnchor(current, t.placement?.anchor, insertion);
-  setSectionDraft(secId, next);
-  alert('Inserted generated table into draft.');
-}
 
 
   function escapeRegExp(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
