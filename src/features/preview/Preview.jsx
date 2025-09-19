@@ -255,21 +255,21 @@ txt = stripAiWriteupMarkers(txt);
   }
 
   // TXT humanize (chunked)
- async function humanizeAndDownload(){
+async function humanizeAndDownload(){
   setHmOpen(true); setHmForDocx(false); setHmCancel(false); setHmShowDetails(true);
   try{
     setHmStage('Preparing');
     const fm = buildFrontMatter();
     const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces();
 
-    const chosen = sectionsForScope(); // chosen subset (objects with title,text)
-    const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
+    const chosen = sectionsForScope();
+    const details = chosen.map(s => ({ id: s.name, name: s.name, status: 'pending', reason: '' }));
     setHmDetails(details);
     setHmTotal(chosen.length);
 
     const out = [fm];
 
-    // Build a quick lookup from all pieces by title
+    // Build a quick lookup from all pieces by section name (title)
     const piecesByTitle = new Map(pieces.map(p => [p.title, p.text]));
 
     setHmStage('Humanizing');
@@ -277,45 +277,61 @@ txt = stripAiWriteupMarkers(txt);
       if (hmCancel) break;
       const sec = chosen[i];
       setHmIndex(i);
-      setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'humanizing' } : d));
+      setHmDetails(prev => prev.map(d =>
+        d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
+      ));
 
       const original = piecesByTitle.get(sec.name) || '';
       const sigBefore = countsSignature(original);
       try{
-        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.name}\n\n${original}`, level: humanizeLevel });
-        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+        const { data } = await axios.post('/api/ai/humanize', {
+          text: `# ${sec.name}\n\n${original}`,
+          level: humanizeLevel
+        });
+        const humanized = (data && typeof data.text === 'string')
+          ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
+          : original;
+
         const sigAfter = countsSignature(humanized);
         const safe = (sigBefore === sigAfter);
+
         out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status: safe?'done':'fallback' } : d));
+        setHmDetails(prev => prev.map(d =>
+          d.id === sec.name
+            ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
+            : d
+        ));
       } catch (e) {
         out.push(`# ${sec.name}\n\n${original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'fallback' } : d));
+        setHmDetails(prev => prev.map(d =>
+          d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
+        ));
       }
     }
 
     // Add the untouched sections (outside scope) in original form, preserving order
-    const untouched = pieces.filter(p => !chosen.find(c => c.name===p.title));
+    const untouched = pieces.filter(p => !chosen.find(c => c.name === p.title));
     for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
 
     setHmStage('Assembling');
-    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
-    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
-    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
-    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+    const refsText = (useCSL && (refsCSL || '').trim()) ? refsCSL : refsSimple;
+    if ((listOfFigures || '').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if ((listOfTables || '').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if ((refsText || '').trim())      out.push(`\n# References\n\n${refsText}`);
 
     const finalText = out.join('\n\n');
 
     // Download TXT
     const blob = new Blob([finalText], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href=url; a.download=`manuscript_humanized_${humanizeLevel}.txt`;
+    const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.txt`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } finally {
     setHmStage('Done');
   }
 }
+
 
 
 
@@ -339,6 +355,25 @@ function countsSignature(txt=''){
   return `${figs}|${tabs}|${cites}`;
 }
 
+// Parse "f|t|c" into numbers
+function parseSig(sig='0|0|0'){
+  const [f,t,c] = String(sig).split('|').map(n=>parseInt(n||'0',10));
+  return { figs: isNaN(f)?0:f, tabs: isNaN(t)?0:t, cites: isNaN(c)?0:c };
+}
+
+// Build a readable reason when the post-check fails
+function buildFallbackReason(sigBefore, sigAfter){
+  const a = parseSig(sigBefore);
+  const b = parseSig(sigAfter);
+  const diffs = [];
+  if (a.figs !== b.figs) diffs.push(`fig tokens ${a.figs}→${b.figs}`);
+  if (a.tabs !== b.tabs) diffs.push(`tab tokens ${a.tabs}→${b.tabs}`);
+  if (a.cites !== b.cites) diffs.push(`citations ${a.cites}→${b.cites}`);
+  return diffs.length ? `protected counts changed: ${diffs.join(', ')}` : 'post-check failed';
+}
+
+
+  
   
   // DOCX (non-humanized)
   async function exportDocx(){
@@ -369,9 +404,8 @@ async function humanizeAndDownloadDocx(){
     const fm = buildFrontMatter();
     const { pieces, refsSimple, refsCSL, listOfFigures, listOfTables } = await buildPieces({ forDocx: true });
 
-
     const chosen = sectionsForScope();
-    const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending' }));
+    const details = chosen.map(s => ({ id: s.name, name: s.name, status: 'pending', reason: '' }));
     setHmDetails(details);
     setHmTotal(chosen.length);
 
@@ -383,47 +417,62 @@ async function humanizeAndDownloadDocx(){
       if (hmCancel) break;
       const sec = chosen[i];
       setHmIndex(i);
-      setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'humanizing' } : d));
+      setHmDetails(prev => prev.map(d =>
+        d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
+      ));
 
       const original = piecesByTitle.get(sec.name) || '';
       const sigBefore = countsSignature(original);
       try{
-        const { data } = await axios.post('/api/ai/humanize', { text: `# ${sec.name}\n\n${original}`, level: humanizeLevel });
-        const humanized = (data && typeof data.text==='string') ? data.text.replace(/^#\s*[^ \n]+\s*\n+/,'') : original;
+        const { data } = await axios.post('/api/ai/humanize', {
+          text: `# ${sec.name}\n\n${original}`,
+          level: humanizeLevel
+        });
+        const humanized = (data && typeof data.text === 'string')
+          ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
+          : original;
+
         const sigAfter = countsSignature(humanized);
         const safe = (sigBefore === sigAfter);
+
         out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status: safe?'done':'fallback' } : d));
+        setHmDetails(prev => prev.map(d =>
+          d.id === sec.name
+            ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
+            : d
+        ));
       } catch (e) {
         out.push(`# ${sec.name}\n\n${original}`);
-        setHmDetails(prev => prev.map(d => d.id===sec.name ? { ...d, status:'fallback' } : d));
+        setHmDetails(prev => prev.map(d =>
+          d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
+        ));
       }
     }
 
     // untouched sections in original form
-    const untouched = pieces.filter(p => !chosen.find(c => c.name===p.title));
+    const untouched = pieces.filter(p => !chosen.find(c => c.name === p.title));
     for (const p of untouched) out.push(`# ${p.title}\n\n${p.text}`);
 
     setHmStage('Assembling');
-    const refsText = (useCSL && (refsCSL||'').trim()) ? refsCSL : refsSimple;
-    if ((listOfFigures||'').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
-    if ((listOfTables||'').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
-    if ((refsText||'').trim())      out.push(`\n# References\n\n${refsText}`);
+    const refsText = (useCSL && (refsCSL || '').trim()) ? refsCSL : refsSimple;
+    if ((listOfFigures || '').trim()) out.push(`\n# List of Figures\n\n${listOfFigures}`);
+    if ((listOfTables || '').trim())  out.push(`\n# List of Tables\n\n${listOfTables}`);
+    if ((refsText || '').trim())      out.push(`\n# References\n\n${refsText}`);
 
     const finalText = out.join('\n\n');
 
     setHmStage('Generating');
     const { data } = await axios.post(
-  '/api/export/docx',
-  { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx`, figMedia: buildFigMedia() },
-  { responseType: 'arraybuffer' }
-);
+      '/api/export/docx',
+      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx`, figMedia: buildFigMedia() },
+      { responseType: 'arraybuffer' }
+    );
 
     const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = `manuscript_humanized_${humanizeLevel}.docx`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } finally {
     setHmStage('Done');
   }
@@ -440,7 +489,9 @@ async function retryFailedTxt(){
   const byTitle = new Map(pieces.map(p => [p.title, p.text]));
   const chosen = pieces.filter(p => names.includes(p.title));
 
-  const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+
+  const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending', reason:'' }));
+
   setHmDetails(details);
   setHmTotal(chosen.length);
 
@@ -495,7 +546,10 @@ async function retryFailedDocx(){
   const byTitle = new Map(pieces.map(p => [p.title, p.text]));
   const chosen = pieces.filter(p => names.includes(p.title));
 
-  const details = chosen.map(s => ({ id:s.title, name:s.title, status:'pending' }));
+
+  const details = chosen.map(s => ({ id:s.name, name:s.name, status:'pending', reason:'' }));
+
+
   setHmDetails(details);
   setHmTotal(chosen.length);
 
@@ -922,9 +976,14 @@ async function handleProjectUpload(evt){
 {hmShowDetails && (
       <div style={{maxHeight:'30vh', overflow:'auto', marginTop:10}}>
         <table style={{width:'100%', fontSize:13, borderCollapse:'collapse'}}>
-          <thead>
-            <tr><th align="left">Section</th><th align="left">Status</th></tr>
-          </thead>
+        <thead>
+  <tr>
+    <th align="left">Section</th>
+    <th align="left">Status</th>
+    <th align="left">Reason</th>
+  </tr>
+</thead>
+
           <tbody>
             {hmDetails.map((d,i)=>(
               <tr key={i}>
@@ -934,6 +993,8 @@ async function handleProjectUpload(evt){
                   d.status==='fallback' ? '#b45309' :
                   d.status==='humanizing' ? '#1d4ed8' : '#334155'
                 }}>{d.status}</td>
+                <td style={{padding:'4px 6px', color:'#667'}}>{d.reason || '—'}</td>
+
               </tr>
             ))}
           </tbody>
