@@ -281,32 +281,35 @@ async function humanizeAndDownload(){
         d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
       ));
 
-      const original = piecesByTitle.get(sec.name) || '';
-      const sigBefore = countsSignature(original);
-      try{
-        const { data } = await axios.post('/api/ai/humanize', {
-          text: `# ${sec.name}\n\n${original}`,
-          level: humanizeLevel
-        });
-        const humanized = (data && typeof data.text === 'string')
-          ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
-          : original;
+     const prot = protectCitationsText(original);
+try{
+  const { data } = await axios.post('/api/ai/humanize', {
+    text: `# ${sec.name}\n\n${prot.text}`,
+    level: humanizeLevel
+  });
+  const raw = (data && typeof data.text==='string')
+    ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
+    : original;
 
-        const sigAfter = countsSignature(humanized);
-        const safe = (sigBefore === sigAfter);
+  // Restore citations BEFORE checking signature
+  const humanized = restoreCitationsText(raw, prot.placeholders);
 
-        out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d =>
-          d.id === sec.name
-            ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
-            : d
-        ));
-      } catch (e) {
-        out.push(`# ${sec.name}\n\n${original}`);
-        setHmDetails(prev => prev.map(d =>
-          d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
-        ));
-      }
+  const sigAfter = countsSignature(humanized);
+  const safe = (sigBefore === sigAfter);
+
+  out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
+  setHmDetails(prev => prev.map(d =>
+    d.id===sec.name
+      ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
+      : d
+  ));
+} catch (e) {
+  out.push(`# ${sec.name}\n\n${original}`);
+  setHmDetails(prev => prev.map(d =>
+    d.id===sec.name ? { ...d, status:'fallback', reason:'ai-error' } : d
+  ));
+}
+
     }
 
     // Add the untouched sections (outside scope) in original form, preserving order
@@ -372,6 +375,27 @@ function buildFallbackReason(sigBefore, sigAfter){
   return diffs.length ? `protected counts changed: ${diffs.join(', ')}` : 'post-check failed';
 }
 
+// Protect inline citations by replacing them with placeholders [[CIT0]], [[CIT1]], ...
+function protectCitationsText(text=''){
+  const placeholders = [];
+  let i = 0;
+  const re = /(\[(?:\d+(?:–\d+)?(?:,\s*\d+(?:–\d+)?)*)\]|\((?:[^()]*\d{4}[a-z]?)(?:;[^()]*\d{4}[a-z]?)*\))/g;
+  const out = String(text).replace(re, (m) => {
+    const tag = `[[CIT${i++}]]`;
+    placeholders.push({ tag, val: m });
+    return tag;
+  });
+  return { text: out, placeholders };
+}
+
+function restoreCitationsText(text='', placeholders=[]){
+  let out = String(text);
+  for (const p of placeholders) {
+    // Replace all occurrences of this placeholder (should be 1:1)
+    out = out.replaceAll(p.tag, p.val);
+  }
+  return out;
+}
 
   
   
@@ -421,32 +445,34 @@ async function humanizeAndDownloadDocx(){
         d.id === sec.name ? { ...d, status: 'humanizing', reason: '' } : d
       ));
 
-      const original = piecesByTitle.get(sec.name) || '';
-      const sigBefore = countsSignature(original);
-      try{
-        const { data } = await axios.post('/api/ai/humanize', {
-          text: `# ${sec.name}\n\n${original}`,
-          level: humanizeLevel
-        });
-        const humanized = (data && typeof data.text === 'string')
-          ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
-          : original;
+      const prot = protectCitationsText(original);
+try{
+  const { data } = await axios.post('/api/ai/humanize', {
+    text: `# ${sec.name}\n\n${prot.text}`,
+    level: humanizeLevel
+  });
+  const raw = (data && typeof data.text==='string')
+    ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
+    : original;
 
-        const sigAfter = countsSignature(humanized);
-        const safe = (sigBefore === sigAfter);
+  const humanized = restoreCitationsText(raw, prot.placeholders);
 
-        out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-        setHmDetails(prev => prev.map(d =>
-          d.id === sec.name
-            ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
-            : d
-        ));
-      } catch (e) {
-        out.push(`# ${sec.name}\n\n${original}`);
-        setHmDetails(prev => prev.map(d =>
-          d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
-        ));
-      }
+  const sigAfter = countsSignature(humanized);
+  const safe = (sigBefore === sigAfter);
+
+  out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
+  setHmDetails(prev => prev.map(d =>
+    d.id===sec.name
+      ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
+      : d
+  ));
+} catch (e) {
+  out.push(`# ${sec.name}\n\n${original}`);
+  setHmDetails(prev => prev.map(d =>
+    d.id===sec.name ? { ...d, status:'fallback', reason:'ai-error' } : d
+  ));
+}
+
     }
 
     // untouched sections in original form
