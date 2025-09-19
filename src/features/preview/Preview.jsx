@@ -254,6 +254,51 @@ txt = stripAiWriteupMarkers(txt);
     })();
   }
 
+
+  // Split text into [{type:'text'|'cit', val:string}] keeping citations separate
+function splitByCitations(text=''){
+  const parts = [];
+  const re = /(\[(?:\d+(?:–\d+)?(?:,\s*\d+(?:–\d+)?)*)\]|\((?:[^()]*\d{4}[a-z]?)(?:;[^()]*\d{4}[a-z]?)*\))/g;
+  let last = 0;
+  const s = String(text);
+  let m;
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push({ type:'text', val:s.slice(last, m.index) });
+    parts.push({ type:'cit',  val:m[0] });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) parts.push({ type:'text', val:s.slice(last) });
+  return parts;
+}
+
+// Humanize only non-citation spans, stitch citations back
+async function humanizePreserveCitations(original, level){
+  const parts = splitByCitations(original);
+  const out = [];
+  for (const p of parts) {
+    if (p.type === 'cit') {
+      out.push(p.val); // keep citations exactly
+    } else if (p.type === 'text' && p.val.trim()) {
+      try {
+        const { data } = await axios.post('/api/ai/humanize', {
+          text: p.val,
+          level
+        });
+        const h = (data && typeof data.text === 'string') ? data.text : p.val;
+        out.push(h);
+      } catch {
+        out.push(p.val); // on error, keep original span
+      }
+    } else {
+      out.push(p.val); // empty or spacing span
+    }
+  }
+  return out.join('');
+}
+
+  
+
+  
   // TXT humanize (chunked)
 async function humanizeAndDownload(){
   setHmOpen(true); setHmForDocx(false); setHmCancel(false); setHmShowDetails(true);
@@ -286,37 +331,55 @@ const original = piecesByTitle.get(sec.name) || '';
 const sigBefore = countsSignature(original);
 
 // protect cites, then send to AI
+// 1) Fast path: placeholder method
 const prot = protectCitationsText(original);
+let used = original;
+let ok = false;
+let reason = '';
 
 try{
   const { data } = await axios.post('/api/ai/humanize', {
     text: `# ${sec.name}\n\n${prot.text}`,
     level: humanizeLevel
   });
-
-  // strip heading the model might echo
-  const raw = (data && typeof data.text === 'string')
+  const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
-
-  // restore cites BEFORE signature check
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
-  const safe = (sigBefore === sigAfter);
-
-  out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-  setHmDetails(prev => prev.map(d =>
-    d.id === sec.name
-      ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
-      : d
-  ));
-} catch (e) {
-  out.push(`# ${sec.name}\n\n${original}`);
-  setHmDetails(prev => prev.map(d =>
-    d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
-  ));
+  ok = (sigBefore === sigAfter);
+  used = ok ? humanized : original;
+  reason = ok ? '' : buildFallbackReason(sigBefore, sigAfter);
+} catch {
+  ok = false;
+  used = original;
+  reason = 'ai-error';
 }
+
+// 2) If fast path failed, fallback to segmentation (humanize-only-text)
+if (!ok) {
+  try{
+    const salvaged = await humanizePreserveCitations(original, humanizeLevel);
+    const sigAfter2 = countsSignature(salvaged);
+    if (sigBefore === sigAfter2) {
+      used = salvaged;
+      ok = true;
+      reason = '';
+    }
+  } catch {
+    // keep original & reason as-is
+  }
+}
+
+// Finalize
+out.push(`# ${sec.name}\n\n${used}`);
+setHmDetails(prev => prev.map(d =>
+  d.id === sec.name
+    ? { ...d, status: ok ? 'done' : 'fallback', reason: ok ? '' : reason }
+    : d
+));
+
 
 
     }
@@ -459,37 +522,55 @@ const original = piecesByTitle.get(sec.name) || '';
 const sigBefore = countsSignature(original);
 
 // protect cites, then send to AI
+// 1) Fast path: placeholder method
 const prot = protectCitationsText(original);
+let used = original;
+let ok = false;
+let reason = '';
 
 try{
   const { data } = await axios.post('/api/ai/humanize', {
     text: `# ${sec.name}\n\n${prot.text}`,
     level: humanizeLevel
   });
-
-  // strip heading the model might echo
-  const raw = (data && typeof data.text === 'string')
+  const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
-
-  // restore cites BEFORE signature check
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
-  const safe = (sigBefore === sigAfter);
-
-  out.push(`# ${sec.name}\n\n${safe ? humanized : original}`);
-  setHmDetails(prev => prev.map(d =>
-    d.id === sec.name
-      ? { ...d, status: safe ? 'done' : 'fallback', reason: safe ? '' : buildFallbackReason(sigBefore, sigAfter) }
-      : d
-  ));
-} catch (e) {
-  out.push(`# ${sec.name}\n\n${original}`);
-  setHmDetails(prev => prev.map(d =>
-    d.id === sec.name ? { ...d, status: 'fallback', reason: 'ai-error' } : d
-  ));
+  ok = (sigBefore === sigAfter);
+  used = ok ? humanized : original;
+  reason = ok ? '' : buildFallbackReason(sigBefore, sigAfter);
+} catch {
+  ok = false;
+  used = original;
+  reason = 'ai-error';
 }
+
+// 2) If fast path failed, fallback to segmentation (humanize-only-text)
+if (!ok) {
+  try{
+    const salvaged = await humanizePreserveCitations(original, humanizeLevel);
+    const sigAfter2 = countsSignature(salvaged);
+    if (sigBefore === sigAfter2) {
+      used = salvaged;
+      ok = true;
+      reason = '';
+    }
+  } catch {
+    // keep original & reason as-is
+  }
+}
+
+// Finalize
+out.push(`# ${sec.name}\n\n${used}`);
+setHmDetails(prev => prev.map(d =>
+  d.id === sec.name
+    ? { ...d, status: ok ? 'done' : 'fallback', reason: ok ? '' : reason }
+    : d
+));
+
 
 
     }
