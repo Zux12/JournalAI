@@ -590,6 +590,10 @@ For each proposed table:
 - If counts/samples/time are natural, pick sensible sizes (e.g., n=3–10; times in mins/hours; realistic magnitudes).
 - Provide placement: section name ("Results"|"Discussion") and an anchor sentence (exact or short substring) AFTER which to insert the token.
 - Provide ${lenGuide} of write-up text to accompany the table (neutral, no invented claims).
+- Provide exactly two supporting citations as identifiers in an array "citations": each item must be a DOI (e.g., "10.xxxx/..."), a PMID ("pmid:12345678"), or an arXiv id ("arxiv:2401.01234"). Do not format author names; only identifiers.
+- If you cannot find suitable citations, leave "citations":[]
+
+
 
 STRICT RULES:
 - NO invented citations or references.
@@ -601,7 +605,8 @@ STRICT RULES:
       "columns":["col1","col2",...],
       "rows":[ ["r1c1","r1c2",...], ["r2c1","r2c2",...] ],
       "placement":{"section":"Results|Discussion","anchor":"string"},
-      "paragraph": "string"
+     "paragraph": "string",
+     "citations": ["doi:...","pmid:..."]
     }
   ]
 }`;
@@ -653,7 +658,8 @@ STRICT RULES:
         section: (t?.placement?.section || '').toString().slice(0, 100),
         anchor: (t?.placement?.anchor || '').toString().slice(0, 400)
       },
-      paragraph: (t?.paragraph || '').toString().slice(0, 1200)
+      paragraph: (t?.paragraph || '').toString().slice(0, 1200),
+      citations: Array.isArray(t?.citations) ? t.citations.slice(0,2).map(x=>String(x||'').slice(0,200)) : []
     }));
 
     return res.json({ tables });
