@@ -382,7 +382,7 @@ if (ok) {
   const sigUsed = countsSignature(used);
   const tokProt = protectTokensText(used);
   const citProt2 = protectCitationsText(tokProt.text);
-  const polished = polishCadence(citProt2.text, i);          // i = loop index
+  const polished = polishCadence(citProt2.text, i, sec.name); // section-aware polishing
   const restored = restoreCitationsText(polished, citProt2.placeholders);
   const withTokens = restoreTokensText(restored, tokProt.placeholders);
 
@@ -487,45 +487,87 @@ function restoreTokensText(text='', placeholders=[]){
 }
 
 // --- Cadence Polisher: small, safe, style-only changes (no facts/citations/tokens) ---
-function polishCadence(text='', seed=0){
-  const openers = ['Notably,', 'In practical terms,', 'Two points emerge:', 'Critically,', 'We observed that'];
-  const openerBad = /^(Additionally|Furthermore|Moreover|However|In conclusion|In essence|In summary|Overall)\b[:,]?/i;
+function polishCadence(text = '', seed = 0, sectionName = '') {
+  // Section-aware settings: avoid forcing openers in Methods/Conclusion
+  const sec = String(sectionName || '').toLowerCase();
+  const allowOpeners = !(sec === 'methods' || sec === 'conclusion');
 
-  // Cliché replacements map (very conservative)
+  // Gentle, safe openers (comma only, no colons)
+  const openers = ['Notably,', 'Importantly,', 'In practice,', 'We observe that', 'Two observations follow.'];
+  const badOpenersRE = /^(Additionally|Furthermore|Moreover|However|In conclusion|In essence|In summary|Overall|To wrap things up)\b[:,]?/i;
+
+  // Cliché / stiff phrasing replacements (conservative)
   const reps = [
-    { re:/\bIn recent years\b/gi, to:'Recently' },
+    // soften templated intensifiers
+    { re:/\bimportance becomes critical\b/gi, to:'is critical' },
+    { re:/\bnecessity(?:\s+of [^,]+)? becomes critical\b/gi, to:'is critical' },
+
+    // table phrasing: prefer "shows"/"compares"
+    { re:/\bTable\s+(\d+)\s+provides(?:\s+a)?\s+(comparative\s+analysis|comparison)\b/gi, to:'Table $1 compares' },
+    { re:/\bTable\s+(\d+)\s+illustrates\b/gi, to:'Table $1 shows' },
+
+    // discussion generic
+    { re:/\bManaging oil and gas assets through integrity management\b/gi, to:'Managing oil and gas assets via integrity programs' },
+
+    // boilerplate reductions
     { re:/\bIt is worth noting that\b/gi, to:'Notably,' },
     { re:/\bIt should be noted that\b/gi, to:'Importantly,' },
-    { re:/\bTable\s+(\d+)\s+illustrates\b/gi, to:'Table $1 shows' },
-    { re:/\bFigure\s+(\d+)\s+illustrates\b/gi, to:'Figure $1 shows' },
+    { re:/\bIn recent years\b/gi, to:'Recently' },
+
+    // slight de-nominalization
+    { re:/\bwhich encompasses\b/gi, to:'encompassing' }
   ];
+
+  // Only once per paragraph: swap a generic opener if present
+  const maybeSwapOpener = (s, idx) => {
+    if (!allowOpeners) return s;
+    const trimmed = s.trimStart();
+    if (badOpenersRE.test(trimmed)) {
+      const pick = openers[(seed + idx) % openers.length];
+      // Replace only the opener token, keep rest of sentence
+      return trimmed.replace(badOpenersRE, pick);
+    }
+    return s;
+  };
+
+  // Light punctuation variety (at most once): ", which" -> " — which"
+  const dashifyWhich = (s) => {
+    // only if there's no existing dash in the sentence; avoid e.g./i.e. patterns
+    if (s.includes('—') || /\b(e\.g\.|i\.e\.)/i.test(s)) return s;
+    return s.replace(/, which/, ' — which');
+  };
+
+  // Clean up awkward punctuation left by earlier transforms
+  const tidyPunct = (s) => {
+    return s
+      .replace(/:\s*,/g, ': ')    // " :,"
+      .replace(/,\s*,/g, ', ')    // ",,"
+      .replace(/\s{2,}/g, ' ')    // double spaces
+      .replace(/\s+([,.:;])/g, '$1'); // space before punctuation
+  };
 
   const paras = String(text).split(/\n{2,}/);
   const polished = paras.map((p, idx) => {
     let s = p;
 
-    // Replace generic paragraph openers once per paragraph (if present)
-    s = s.replace(/^(\s*)[A-Z][a-z]+.*?/, (line) => {
-      // If the very start matches a generic opener, swap it
-      if (openerBad.test(line.trimStart())) {
-        const pick = openers[(seed + idx) % openers.length];
-        // replace only the opener token, preserve rest of line after comma/colon if any
-        return line.trimStart().replace(openerBad, pick);
-      }
-      return line;
-    });
+    // swap opener if needed
+    s = maybeSwapOpener(s, idx);
 
-    // Cliché replacements
-    reps.forEach(({re,to}) => { s = s.replace(re, to); });
+    // cliché replacements
+    reps.forEach(({ re, to }) => { s = s.replace(re, to); });
 
-    // Gentle punctuation variety: replace first ", which" with " — which" (once)
-    s = s.replace(/, which/, ' — which');
+    // one dash insertion per paragraph max
+    s = dashifyWhich(s);
+
+    // punctuation tidy
+    s = tidyPunct(s);
 
     return s;
   });
 
   return polished.join('\n\n');
 }
+
 
 
 // Protect inline citations by replacing them with placeholders [[CIT0]], [[CIT1]], ...
@@ -650,7 +692,7 @@ if (ok) {
   const sigUsed = countsSignature(used);
   const tokProt = protectTokensText(used);
   const citProt2 = protectCitationsText(tokProt.text);
-  const polished = polishCadence(citProt2.text, i);          // i = loop index
+  const polished = polishCadence(citProt2.text, i, sec.name); // section-aware polishing
   const restored = restoreCitationsText(polished, citProt2.placeholders);
   const withTokens = restoreTokensText(restored, tokProt.placeholders);
 
