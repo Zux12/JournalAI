@@ -1004,20 +1004,21 @@ function buildGroundingContextForSection(sectionName){
       checked={groundedMode}
       onChange={e=>setGroundedMode(e.target.checked)}
     />
-    {' '}Grounded (use sources for context)
+    {' '}Grounded + Natural Cadence
   </label>
   <a
     href="#"
     onClick={(e)=>{ e.preventDefault(); setShowGroundedHelp(true); }}
     style={{fontSize:12}}
-    title="What is Grounded mode?"
+    title="What is Grounded + Natural Cadence?"
   >
     ℹ️ What is this?
   </a>
   <span style={{fontSize:12, color:'#667'}}>
-    Anchors the rewrite to snippets/numbers from Sources and generated tables.
+    Uses sources/tables to anchor wording and varies sentence rhythm to avoid boilerplate.
   </span>
 </div>
+
 
 
 
@@ -1139,23 +1140,18 @@ function buildGroundingContextForSection(sectionName){
     display:'flex', alignItems:'center', justifyContent:'center', zIndex:120
   }}>
     <div className="card" style={{width:'min(720px, 92vw)'}}>
-      <h3>Grounded (use sources for context)</h3>
+      <h3>Grounded + Natural Cadence</h3>
       <div style={{fontSize:14, color:'#111', lineHeight:1.45}}>
-        <p><strong>What it does:</strong> Passes short evidence snippets (from your uploaded PDFs and generated tables) to the editor so rewrites stay <em>anchored</em> to real numbers, units, and terminology.</p>
+        <p><strong>What it does:</strong></p>
         <ul style={{margin:'6px 0 8px 18px'}}>
-          <li>Prefers wording tied to <strong>Snippets &amp; Tables</strong> (e.g., means, CIs, p-values, instrument names).</li>
-          <li>Keeps <strong>citations</strong>, <strong>{'{fig:}/{tab:'}</strong> tokens, and <strong>numbers/units</strong> intact (they’re protected and post-checked).</li>
-          <li>Outputs the same section structure; only connective prose is improved.</li>
+          <li><strong>Grounded:</strong> passes short evidence snippets (from your PDFs and generated tables) so rewrites stay anchored to real numbers, units, and terminology.</li>
+          <li><strong>Natural Cadence:</strong> encourages varied sentence lengths (some short, a few long), rotates paragraph openers, and allows sparse em-dashes/parentheticals to reduce boilerplate rhythm.</li>
         </ul>
-        <p><strong>What it does not do:</strong></p>
-        <ul style={{margin:'6px 0 8px 18px'}}>
-          <li>Does not invent results or citations.</li>
-          <li>Does not insert new tokens or move existing ones.</li>
-          <li>Does not copy long passages from sources (snippets are short and for context only).</li>
-        </ul>
-        <p><strong>When to use:</strong> Results/Discussion or any paragraph that should include concrete values and domain-specific phrasing.</p>
+        <p><strong>Preserved exactly:</strong> citations, {`{fig:}/{tab:`} tokens, and all numbers/units (they’re protected and post-checked).</p>
+        <p><strong>What it does not do:</strong> invent results or citations, move or insert tokens, or copy long source passages (snippets are brief and for context only).</p>
+        <p><strong>When to use:</strong> Results/Discussion or any paragraph that benefits from concrete values and more natural academic cadence.</p>
         <p style={{color:'#667', marginTop:6}}>
-          Note: If you have few or no Sources/Tables, Grounded mode still works, but its effect is smaller because there’s less evidence to anchor.
+          Note: If you have few Sources/Tables, Grounded still works but its effect is smaller because there’s less evidence to anchor.
         </p>
       </div>
       <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:12}}>
@@ -1164,6 +1160,7 @@ function buildGroundingContextForSection(sectionName){
     </div>
   </div>
 )}
+
 
 
       
