@@ -488,85 +488,98 @@ function restoreTokensText(text='', placeholders=[]){
 
 // --- Cadence Polisher: small, safe, style-only changes (no facts/citations/tokens) ---
 function polishCadence(text = '', seed = 0, sectionName = '') {
-  // Section-aware settings: avoid forcing openers in Methods/Conclusion
+  // Section-aware: do NOT force openers in Introduction/Methods/Conclusion
   const sec = String(sectionName || '').toLowerCase();
-  const allowOpeners = !(sec === 'methods' || sec === 'conclusion');
+  const allowOpeners = !(sec === 'introduction' || sec === 'methods' || sec === 'conclusion');
 
-  // Gentle, safe openers (comma only, no colons)
-  const openers = ['Notably,', 'Importantly,', 'In practice,', 'We observe that', 'Two observations follow.'];
+  // Safe openers (no colons); use sparingly
+  const openerPool = ['Notably,', 'Importantly,', 'In practice,', 'We observe that', 'Two observations follow.'];
   const badOpenersRE = /^(Additionally|Furthermore|Moreover|However|In conclusion|In essence|In summary|Overall|To wrap things up)\b[:,]?/i;
 
-  // Cliché / stiff phrasing replacements (conservative)
-  const reps = [
-    // soften templated intensifiers
-    { re:/\bimportance becomes critical\b/gi, to:'is critical' },
-    { re:/\bnecessity(?:\s+of [^,]+)? becomes critical\b/gi, to:'is critical' },
+  // seeded picker for deterministic variety
+  const pick = (arr, idx = 0) => arr[(seed + idx) % arr.length];
 
-    // table phrasing: prefer "shows"/"compares"
-    { re:/\bTable\s+(\d+)\s+provides(?:\s+a)?\s+(comparative\s+analysis|comparison)\b/gi, to:'Table $1 compares' },
-    { re:/\bTable\s+(\d+)\s+illustrates\b/gi, to:'Table $1 shows' },
-
-    // discussion generic
-    { re:/\bManaging oil and gas assets through integrity management\b/gi, to:'Managing oil and gas assets via integrity programs' },
-
-    // boilerplate reductions
-    { re:/\bIt is worth noting that\b/gi, to:'Notably,' },
-    { re:/\bIt should be noted that\b/gi, to:'Importantly,' },
-    { re:/\bIn recent years\b/gi, to:'Recently' },
-
-    // slight de-nominalization
-    { re:/\bwhich encompasses\b/gi, to:'encompassing' }
-  ];
-
-  // Only once per paragraph: swap a generic opener if present
+  // Helpers
   const maybeSwapOpener = (s, idx) => {
-    if (!allowOpeners) return s;
+    if (!allowOpeners) return s;               // disabled in Intro/Methods/Conclusion
+    if (idx % 2 === 0) return s;               // apply at most to every other paragraph
     const trimmed = s.trimStart();
     if (badOpenersRE.test(trimmed)) {
-      const pick = openers[(seed + idx) % openers.length];
-      // Replace only the opener token, keep rest of sentence
-      return trimmed.replace(badOpenersRE, pick);
+      const chosen = pick(openerPool, idx);
+      return trimmed.replace(badOpenersRE, chosen);  // replace only the opener token
     }
     return s;
   };
 
-  // Light punctuation variety (at most once): ", which" -> " — which"
   const dashifyWhich = (s) => {
-    // only if there's no existing dash in the sentence; avoid e.g./i.e. patterns
+    // at most one dash per paragraph; avoid e.g./i.e. ranges
     if (s.includes('—') || /\b(e\.g\.|i\.e\.)/i.test(s)) return s;
     return s.replace(/, which/, ' — which');
   };
 
-  // Clean up awkward punctuation left by earlier transforms
   const tidyPunct = (s) => {
     return s
-      .replace(/:\s*,/g, ': ')    // " :,"
-      .replace(/,\s*,/g, ', ')    // ",,"
-      .replace(/\s{2,}/g, ' ')    // double spaces
+      .replace(/:\s*,/g, ': ')      // " :,"
+      .replace(/,\s*,/g, ', ')      // ",,"
+      .replace(/\s{2,}/g, ' ')      // double spaces
       .replace(/\s+([,.:;])/g, '$1'); // space before punctuation
   };
 
+  // Conservative de-template replacements (no facts touched)
+  const softenIntensifiers = (s) => s
+    .replace(/\bimportance becomes critical\b/gi, 'is critical')
+    .replace(/\bnecessity(?:\s+of [^,]+)? becomes critical\b/gi, 'is critical');
+
+  // Table phrasing: rotate verbs (shows/compares/summarizes/reports)
+  const tableVerbify = (s, idx) => s.replace(
+    /\bTable\s+(\d+)\s+(?:provides(?:\s+a)?\s+(?:comparison|comparative\s+analysis)|illustrates|shows)\b/gi,
+    (_m, n) => `Table ${n} ${pick(['compares', 'shows', 'summarizes', 'reports'], idx)}`
+  );
+
+  // Discussion staple phrasing softener
+  const discussionSoft = (s) => s
+    .replace(/\bManaging oil and gas assets through integrity management\b/gi, 'Managing oil and gas assets via integrity programs');
+
+  // Gentle nominalization softener
+  const liteDenominal = (s) => s.replace(/\bwhich encompasses\b/gi, 'encompassing');
+
+  // Redundancy trimmer: remove duplicate tokens & repeated phrase second time
+  const tidyRedundancy = (s) => {
+    // the the -> the
+    s = s.replace(/\b(\w+)\s+\1\b/gi, '$1');
+    // "aging infrastructure" → second occurrence becomes "these assets"
+    let aiCount = 0;
+    s = s.replace(/aging infrastructure/gi, () => (++aiCount === 1 ? 'aging infrastructure' : 'these assets'));
+    return s;
+  };
+
   const paras = String(text).split(/\n{2,}/);
-  const polished = paras.map((p, idx) => {
+  const out = paras.map((p, idx) => {
     let s = p;
 
-    // swap opener if needed
+    // 1) opener (very limited)
     s = maybeSwapOpener(s, idx);
 
-    // cliché replacements
-    reps.forEach(({ re, to }) => { s = s.replace(re, to); });
+    // 2) targeted phrasing tweaks
+    s = softenIntensifiers(s);
+    s = tableVerbify(s, idx);
+    if (sec === 'discussion') s = discussionSoft(s);
+    s = liteDenominal(s);
 
-    // one dash insertion per paragraph max
+    // 3) tiny rhythm change (once)
     s = dashifyWhich(s);
 
-    // punctuation tidy
+    // 4) redundancy + punctuation tidy
+    s = tidyRedundancy(s);
     s = tidyPunct(s);
 
     return s;
   });
 
-  return polished.join('\n\n');
+  return out.join('\n\n');
 }
+
+
 
 
 
