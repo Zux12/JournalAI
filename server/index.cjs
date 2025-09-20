@@ -383,19 +383,35 @@ function parseMarkdownTable(mdLines) {
 function makeDocxTableFromDataset(ds){
   const headers = Array.isArray(ds?.columns) ? ds.columns : [];
   const body    = Array.isArray(ds?.rows)    ? ds.rows    : [];
+
   const headerRow = headers.length
     ? new TableRow({
-        children: headers.map(h => new TableCell({ children: [ new Paragraph(String(h)) ] }))
+        children: headers.map(h =>
+          new TableCell({
+            children: [ new Paragraph({ text: String(h), style: 'Normal' }) ]
+          })
+        )
       })
     : null;
+
   const bodyRows = body.map(r =>
     new TableRow({
-      children: r.map(cell => new TableCell({ children: [ new Paragraph(String(cell ?? '')) ] }))
+      children: r.map(cell =>
+        new TableCell({
+          children: [ new Paragraph({ text: String(cell ?? ''), style: 'Normal' }) ]
+        })
+      )
     })
   );
+
   const rows = headerRow ? [headerRow, ...bodyRows] : bodyRows;
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows
+  });
 }
+
 
 
     
@@ -414,7 +430,10 @@ function makeDocxTable({ headers, body }) {
   const bodyRows = body.map(r =>
     new TableRow({
       children: r.map(cell =>
-        new TableCell({ children: [ new Paragraph(cell) ] })
+new TableCell({
+  children: [ new Paragraph({ text: String(cell ?? ''), style: 'Normal' }) ]
+})
+
       )
     })
   );
@@ -453,7 +472,12 @@ function imageParasForToken(tokenId){
 
   const pImg = new Paragraph({ children: [img], alignment: AlignmentType.CENTER });
   const cap  = meta.caption ? meta.caption : `Figure: ${tokenId}`;
-  const pCap = new Paragraph({ text: cap, alignment: AlignmentType.CENTER });
+const pCap = new Paragraph({
+  text: cap,
+  style: 'Normal',
+  alignment: AlignmentType.CENTER
+});
+
 
   return [pImg, pCap];
 }
@@ -511,7 +535,12 @@ for (let i = 0; i < lines.length; i++) {
       children.push(...paras);
     } else {
       // fallback: leave a placeholder paragraph if no media found
-      children.push(new Paragraph({ text: `[Missing figure: ${id}]`, alignment: AlignmentType.CENTER }));
+children.push(new Paragraph({
+  text: `[Missing figure: ${id}]`,
+  style: 'Normal',
+  alignment: AlignmentType.CENTER
+}));
+
     }
     continue;
   }
@@ -527,11 +556,21 @@ for (let i = 0; i < lines.length; i++) {
       children.push(table);
       // Optional caption
       if (ds.caption) {
-        children.push(new Paragraph({ text: ds.caption, alignment: AlignmentType.CENTER }));
+children.push(new Paragraph({
+  text: ds.caption,
+  style: 'Normal',
+  alignment: AlignmentType.CENTER
+}));
+
       }
     } else {
       // fallback: keep placeholder if we have no dataset
-      children.push(new Paragraph({ text: `[Table: ${id}]`, alignment: AlignmentType.CENTER }));
+children.push(new Paragraph({
+  text: `[Table: ${id}]`,
+  style: 'Normal',
+  alignment: AlignmentType.CENTER
+}));
+
     }
     continue;
   }
@@ -564,33 +603,36 @@ for (let i = 0; i < lines.length; i++) {
     continue;
   }
 
-  // Normal paragraph
-  children.push(new Paragraph({ text: line, alignment: AlignmentType.JUSTIFIED }));
+
+  // Normal paragraph (force 'Normal' style)
+children.push(new Paragraph({
+  text: line,
+  style: 'Normal',
+  alignment: AlignmentType.JUSTIFIED
+}));
+
 }
 
 const doc = new Document({
   styles: {
-    default: {
-      document: {
-        run: {
-          font: 'Times New Roman',
-          size: 24,         // half-points = 12 pt
-          color: '000000'
-        },
-        paragraph: {
-          spacing: { line: 360 } // 1.5 lines (240 = single)
-        }
-      }
-    },
+    // Lock body font/size/colour + spacing
     paragraphStyles: [
+      {
+        id: 'Normal',
+        name: 'Normal',
+        basedOn: 'Normal',
+        next: 'Normal',
+        run: { font: 'Times New Roman', size: 24, color: '000000' }, // 12pt
+        paragraph: { spacing: { line: 360 } } // 1.5 line (240 = single)
+      },
       {
         id: 'Heading1',
         name: 'Heading 1',
         basedOn: 'Normal',
         next: 'Normal',
         quickFormat: true,
-        run: { font: 'Times New Roman', size: 28, bold: true, color: '000000' }, // 14 pt
-        paragraph: { spacing: { after: 120 } }
+        run: { font: 'Times New Roman', size: 28, color: '000000', bold: true }, // 14pt
+        paragraph: { spacing: { before: 120, after: 120 } }
       },
       {
         id: 'Heading2',
@@ -598,7 +640,7 @@ const doc = new Document({
         basedOn: 'Normal',
         next: 'Normal',
         quickFormat: true,
-        run: { font: 'Times New Roman', size: 26, bold: true, color: '000000' }, // 13 pt
+        run: { font: 'Times New Roman', size: 26, color: '000000', bold: true }, // 13pt
         paragraph: { spacing: { before: 120, after: 60 } }
       },
       {
@@ -607,13 +649,14 @@ const doc = new Document({
         basedOn: 'Normal',
         next: 'Normal',
         quickFormat: true,
-        run: { font: 'Times New Roman', size: 24, bold: true, color: '000000' }, // 12 pt
+        run: { font: 'Times New Roman', size: 24, color: '000000', bold: true }, // 12pt
         paragraph: { spacing: { before: 90, after: 45 } }
       }
     ]
   },
   sections: [{ properties: {}, children }]
 });
+
 
 
 
