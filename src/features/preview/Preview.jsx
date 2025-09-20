@@ -11,6 +11,8 @@ const NUMERIC = new Set(['ieee','vancouver','ama','nature','acm','acs']);
 
 
 
+
+
 export default function Preview(){
   const { project, update } = useProjectState();
     // Download/Load project (JSON)
@@ -21,6 +23,8 @@ export default function Preview(){
   const [useCSL, setUseCSL] = React.useState(true);
   const [hzBusy, setHzBusy] = React.useState(false);
   const [hzMode, setHzMode] = React.useState('light'); // light|medium
+  const [groundedMode, setGroundedMode] = React.useState(false); // Grounded (use sources) toggle
+  const [showGroundedHelp, setShowGroundedHelp] = React.useState(false);
   const order = project.planner.sections || [];
   const [humanizeLevel, setHumanizeLevel] = React.useState('light'); // 'proofread'|'light'|'medium'|'heavy'|'extreme'|'ultra'
 const [scope, setScope] = React.useState('entire');                // 'entire'|'selected'|'abstract'|'intro-discussion'|'conclusion'
@@ -338,10 +342,13 @@ let ok = false;
 let reason = '';
 
 try{
-  const { data } = await axios.post('/api/ai/humanize', {
-    text: `# ${sec.name}\n\n${prot.text}`,
-    level: humanizeLevel
-  });
+const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
+const { data } = await axios.post('/api/ai/humanize', {
+  text: `# ${sec.name}\n\n${prot.text}`,
+  level: humanizeLevel,
+  context: ctx
+});
+
   const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
@@ -529,10 +536,13 @@ let ok = false;
 let reason = '';
 
 try{
-  const { data } = await axios.post('/api/ai/humanize', {
-    text: `# ${sec.name}\n\n${prot.text}`,
-    level: humanizeLevel
-  });
+const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
+const { data } = await axios.post('/api/ai/humanize', {
+  text: `# ${sec.name}\n\n${prot.text}`,
+  level: humanizeLevel,
+  context: ctx
+});
+
   const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
     : original;
@@ -892,6 +902,38 @@ async function handleProjectUpload(evt){
 }
 
 
+function buildGroundingContextForSection(sectionName){
+  // Pull text from Sources and (optionally) generated tables to anchor the rewrite
+  const chunks = [];
+
+  // 1) Sources text (trimmed)
+  (project.sources || []).forEach(s => {
+    if (s?.text) {
+      // take the first ~400 chars of each source to keep it small
+      chunks.push(String(s.text).slice(0, 400));
+    }
+  });
+
+  // 2) Generated table previews (a few rows) to inject concrete numbers
+  (project.generatedTableProposals || []).forEach(t => {
+    if (t?.columns && t?.rows && t.rows.length) {
+      const header = `Table: ${t.title || t.id}`;
+      const firstRow = t.rows[0].join(' | ');
+      chunks.push(`${header}\n${(t.columns || []).join(' | ')}\n${firstRow}`);
+    }
+  });
+
+  // 3) Current section’s own draft (a small excerpt) to keep local coherence
+  const sId = (project.planner?.sections || []).find(x => x.name === sectionName)?.id;
+  if (sId) {
+    const local = (project.sections?.[sId]?.draft || '').slice(0, 300);
+    if (local) chunks.push(local);
+  }
+
+  // Keep total under ~2k chars
+  const joined = chunks.join('\n---\n').slice(0, 2000);
+  return joined;
+}
 
   
   
@@ -941,6 +983,32 @@ async function handleProjectUpload(evt){
       <option value="conclusion">Conclusion only</option>
     </select>
   </div>
+
+<div style={{display:'flex', gap:12, alignItems:'center', marginTop:6, flexWrap:'wrap'}}>
+  <label>
+    <input
+      type="checkbox"
+      checked={groundedMode}
+      onChange={e=>setGroundedMode(e.target.checked)}
+    />
+    {' '}Grounded (use sources for context)
+  </label>
+  <a
+    href="#"
+    onClick={(e)=>{ e.preventDefault(); setShowGroundedHelp(true); }}
+    style={{fontSize:12}}
+    title="What is Grounded mode?"
+  >
+    ℹ️ What is this?
+  </a>
+  <span style={{fontSize:12, color:'#667'}}>
+    Anchors the rewrite to snippets/numbers from Sources and generated tables.
+  </span>
+</div>
+
+
+
+  
   {scope === 'selected' && (
     <div>
       <label>Pick sections</label>
@@ -1058,6 +1126,39 @@ async function handleProjectUpload(evt){
 )}
 
       
+{showGroundedHelp && (
+  <div style={{
+    position:'fixed', inset:0, background:'rgba(0,0,0,0.35)',
+    display:'flex', alignItems:'center', justifyContent:'center', zIndex:120
+  }}>
+    <div className="card" style={{width:'min(720px, 92vw)'}}>
+      <h3>Grounded (use sources for context)</h3>
+      <div style={{fontSize:14, color:'#111', lineHeight:1.45}}>
+        <p><strong>What it does:</strong> Passes short evidence snippets (from your uploaded PDFs and generated tables) to the editor so rewrites stay <em>anchored</em> to real numbers, units, and terminology.</p>
+        <ul style={{margin:'6px 0 8px 18px'}}>
+          <li>Prefers wording tied to <strong>Snippets &amp; Tables</strong> (e.g., means, CIs, p-values, instrument names).</li>
+          <li>Keeps <strong>citations</strong>, <strong>{'{fig:}/{tab:'}</strong> tokens, and <strong>numbers/units</strong> intact (they’re protected and post-checked).</li>
+          <li>Outputs the same section structure; only connective prose is improved.</li>
+        </ul>
+        <p><strong>What it does not do:</strong></p>
+        <ul style={{margin:'6px 0 8px 18px'}}>
+          <li>Does not invent results or citations.</li>
+          <li>Does not insert new tokens or move existing ones.</li>
+          <li>Does not copy long passages from sources (snippets are short and for context only).</li>
+        </ul>
+        <p><strong>When to use:</strong> Results/Discussion or any paragraph that should include concrete values and domain-specific phrasing.</p>
+        <p style={{color:'#667', marginTop:6}}>
+          Note: If you have few or no Sources/Tables, Grounded mode still works, but its effect is smaller because there’s less evidence to anchor.
+        </p>
+      </div>
+      <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:12}}>
+        <button onClick={()=>setShowGroundedHelp(false)}>Close</button>
+      </div>
+    </div>
+  </div>
+)}
+
+
       
       
 {hmOpen && (
