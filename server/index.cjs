@@ -727,22 +727,31 @@ api.post('/ai/humanize', async (req, res) => {
 
     const rules = modeRules[mode] || modeRules['light'];
 
-const ctx = String(req.body.context || '').slice(0, 6000);
 
-const systemMsg =
-  'You are a precise academic editor. Your output must preserve meaning, factual content, all numbers/units, ' +
-  'citations (e.g., [1] or (Author, 2020)), and tokens like {fig:ID}/{tab:ID}. Do not invent facts or citations. ' +
-  'Prefer wording that stays grounded in the evidence snippets when provided.';
+    
+
+const cadenceHints = ctx ? (
+  'Natural cadence:\n' +
+  '- Vary sentence lengths (include some short ≤12-word sentences and a few long >35-word sentences per section).\n' +
+  '- Rotate paragraph openers (e.g., “Notably,” “In practical terms,” “We observed,” “Two points emerge…”).\n' +
+  '- Allow sparse em-dashes/parentheticals (≤1 per paragraph). Avoid boilerplate openers (e.g., “In recent years,” “It is worth noting”).\n'
+) : '';
 
 const userMsg =
 `Edit the following section according to these rules:
 ${rules}
+${cadenceHints}
 
 ${ctx ? `EVIDENCE SNIPPETS (for context; do not quote verbatim unless necessary):
 ${ctx}
 
 ` : ''}TEXT:
 ${text.slice(0, 12000)}`;
+
+
+
+
+    
 
 
     const out = await openaiChat(
