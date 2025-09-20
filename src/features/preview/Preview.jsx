@@ -380,17 +380,28 @@ if (!ok) {
 // 3) Cadence Polisher (only when ok). Protect tokens & cites so counts stay identical.
 if (ok) {
   const sigUsed = countsSignature(used);
+
+  // Pass 1: cadence (section-aware), protected
   const tokProt = protectTokensText(used);
   const citProt2 = protectCitationsText(tokProt.text);
-  const polished = polishCadence(citProt2.text, i, sec.name); // section-aware polishing
+  const polished = polishCadence(citProt2.text, i, sec.name);
   const restored = restoreCitationsText(polished, citProt2.placeholders);
-  const withTokens = restoreTokensText(restored, tokProt.placeholders);
+  let variant = restoreTokensText(restored, tokProt.placeholders);
 
-  // sanity: if protected counts changed, keep unpolished
-  if (countsSignature(withTokens) === sigUsed) {
-    used = withTokens;
+  // Sanity: if counts changed, keep original
+  if (countsSignature(variant) !== sigUsed) variant = used;
+
+  // Pass 2: style naturalizer (burstiness, hedges, mid-sentence cite), unprotected BUT rechecked
+  const styled = naturalizeStyle(variant, sec.name, i);
+
+  // Final guard: must match protected counts exactly
+  if (countsSignature(styled) === sigUsed) {
+    used = styled;
+  } else {
+    used = variant; // keep the safe one
   }
 }
+
 
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
@@ -580,6 +591,114 @@ function polishCadence(text = '', seed = 0, sectionName = '') {
 }
 
 
+// --- Sentence/Style Naturalizer (safe: facts/tokens/citations preserved) ---
+
+// Split into sentences (keeps end punctuation). If nothing matches, return the text as one "sentence".
+function splitSentences(s='') {
+  const m = String(s).match(/[^.!?]+[.!?]+(?:\s+|$)/g);
+  return m ? m.map(x => x.trim()) : [String(s)];
+}
+function joinSentences(arr=[]) {
+  // Ensure single space between sentences; preserve their terminal punctuation already included
+  return arr.join(' ');
+}
+
+// Inject a short sentence by splitting one medium/long sentence on a safe seam (once per paragraph)
+function injectShortSentence(sentences, seed=0) {
+  const idx = sentences.findIndex(x => x.split(/\s+/).length >= 24);
+  if (idx === -1) return sentences;
+  const s = sentences[idx];
+
+  // Try to split on " and " / "; " / " — " (safest seams); keep punctuation
+  const seams = ['; ', ' — ', ', and ', ' and '];
+  for (const seam of seams) {
+    const k = s.indexOf(seam);
+    if (k > 12 && k < s.length - 8) { // avoid splitting near edges
+      const left = s.slice(0, k).replace(/\s+$/, '') + '.'; // turn into short sentence
+      const right = s.slice(k + seam.length).replace(/^[\s,]+/, '');
+      const out = sentences.slice(0, idx)
+        .concat([left, right])
+        .concat(sentences.slice(idx+1));
+      return out;
+    }
+  }
+  return sentences;
+}
+
+// Add a mild hedge at the start of a mid paragraph sentence (not the first sentence)
+function insertHedge(sentences, seed=0) {
+  if (sentences.length < 2) return sentences;
+  const hedges = ['Arguably,', 'To some extent,', 'In practice,', 'In part,', 'It remains uncertain whether'];
+  const i = (seed % (sentences.length - 1)) + 1; // pick a later sentence
+  let s = sentences[i];
+
+  // Skip if starts with citation/token/number or already hedged
+  if (/^\s*(\[\d|\(.*\d{4}|{(?:fig|tab):|Notably,|Importantly,|Arguably,|To some extent,|In practice,)/i.test(s)) return sentences;
+
+  // If it's already short (< 8 words), skip
+  if (s.split(/\s+/).length < 8) return sentences;
+
+  const picked = hedges[seed % hedges.length];
+  sentences[i] = `${picked} ${s.charAt(0).toLowerCase()}${s.slice(1)}`;
+  return sentences;
+}
+
+// Move ONE end-weighted citation into mid-sentence (keeps counts)
+// Example: "Xxxxxx, yyyyy (Smith, 2023)." -> "Xxxxxx (Smith, 2023), yyyyy."
+function varyCitationPlacement(sentences) {
+  const reEnd = /\s+(\[[^\]]+\]|\((?:[^()]*\d{4}[a-z]?)(?:;[^()]*\d{4}[a-z]?)*\))([.!?])$/;
+  for (let i=0;i<sentences.length;i++){
+    const s = sentences[i];
+    const m = s.match(reEnd);
+    if (!m) continue;
+
+    // Find a mid clause split: after first comma
+    const mid = s.indexOf(',');
+    if (mid > 8 && mid < s.length - m[0].length - 6) { // avoid edges
+      const cite = m[1], endPunct = m[2];
+      const left = s.slice(0, mid);
+      const right = s.slice(mid+1).replace(reEnd, ''); // strip the end citation
+      sentences[i] = `${left} ${cite},${right}${endPunct}`.replace(/\s{2,}/g,' ');
+      break; // only once per paragraph
+    }
+  }
+  return sentences;
+}
+
+// Gentle transitions: if a paragraph starts with a bland opener, swap; otherwise maybe add a human-like segue
+function softenTransitions(text, sectionName, seed=0) {
+  const sec = String(sectionName||'').toLowerCase();
+  if (sec === 'methods' || sec === 'introduction' || sec === 'conclusion') return text; // no auto-transitions here
+
+  const leading = text.trimStart();
+  if (/^(Additionally|Furthermore|Moreover|However)\b[:,]?/i.test(leading)) {
+    const pool = ['Taken together,', 'All this suggests,', 'Perhaps most importantly,'];
+    const pick = pool[seed % pool.length];
+    return leading.replace(/^(Additionally|Furthermore|Moreover|However)\b[:,]?/i, pick);
+  }
+  return text;
+}
+
+// Main naturalizer: safe style tweaks; no changes to tokens/citations/numbers
+function naturalizeStyle(paragraphText, sectionName, seed=0){
+  let s = paragraphText;
+  // sentence-level operations
+  let sentences = splitSentences(s);
+  sentences = injectShortSentence(sentences, seed);
+  sentences = insertHedge(sentences, seed);
+  sentences = varyCitationPlacement(sentences);
+  s = joinSentences(sentences);
+
+  // paragraph-level transition tune
+  s = softenTransitions(s, sectionName, seed);
+
+  // tidy spaces
+  s = s.replace(/\s{2,}/g,' ');
+  return s;
+}
+
+  
+  
 
 
 
@@ -703,17 +822,28 @@ if (!ok) {
 // 3) Cadence Polisher (only when ok). Protect tokens & cites so counts stay identical.
 if (ok) {
   const sigUsed = countsSignature(used);
+
+  // Pass 1: cadence (section-aware), protected
   const tokProt = protectTokensText(used);
   const citProt2 = protectCitationsText(tokProt.text);
-  const polished = polishCadence(citProt2.text, i, sec.name); // section-aware polishing
+  const polished = polishCadence(citProt2.text, i, sec.name);
   const restored = restoreCitationsText(polished, citProt2.placeholders);
-  const withTokens = restoreTokensText(restored, tokProt.placeholders);
+  let variant = restoreTokensText(restored, tokProt.placeholders);
 
-  // sanity: if protected counts changed, keep unpolished
-  if (countsSignature(withTokens) === sigUsed) {
-    used = withTokens;
+  // Sanity: if counts changed, keep original
+  if (countsSignature(variant) !== sigUsed) variant = used;
+
+  // Pass 2: style naturalizer (burstiness, hedges, mid-sentence cite), unprotected BUT rechecked
+  const styled = naturalizeStyle(variant, sec.name, i);
+
+  // Final guard: must match protected counts exactly
+  if (countsSignature(styled) === sigUsed) {
+    used = styled;
+  } else {
+    used = variant; // keep the safe one
   }
 }
+
 
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
