@@ -342,12 +342,12 @@ let ok = false;
 let reason = '';
 
 try{
-const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
-const { data } = await axios.post('/api/ai/humanize', {
-  text: `# ${sec.name}\n\n${prot.text}`,
-  level: humanizeLevel,
-  context: ctx
-});
+  const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
+  const { data } = await axios.post('/api/ai/humanize', {
+    text: `# ${sec.name}\n\n${prot.text}`,
+    level: humanizeLevel,
+    context: ctx
+  });
 
   const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
@@ -374,8 +374,21 @@ if (!ok) {
       ok = true;
       reason = '';
     }
-  } catch {
-    // keep original & reason as-is
+  } catch { /* keep original & reason as-is */ }
+}
+
+// 3) Cadence Polisher (only when ok). Protect tokens & cites so counts stay identical.
+if (ok) {
+  const sigUsed = countsSignature(used);
+  const tokProt = protectTokensText(used);
+  const citProt2 = protectCitationsText(tokProt.text);
+  const polished = polishCadence(citProt2.text, i);          // i = loop index
+  const restored = restoreCitationsText(polished, citProt2.placeholders);
+  const withTokens = restoreTokensText(restored, tokProt.placeholders);
+
+  // sanity: if protected counts changed, keep unpolished
+  if (countsSignature(withTokens) === sigUsed) {
+    used = withTokens;
   }
 }
 
@@ -453,6 +466,67 @@ function buildFallbackReason(sigBefore, sigAfter){
   if (a.cites !== b.cites) diffs.push(`citations ${a.cites}→${b.cites}`);
   return diffs.length ? `protected counts changed: ${diffs.join(', ')}` : 'post-check failed';
 }
+
+// --- Protect tokens (fig/tab) like we do for cites ---
+function protectTokensText(text=''){
+  const placeholders = [];
+  let i = 0;
+  // match {fig:ID} or {tab:ID}
+  const re = /(\{(?:fig|tab):[a-z0-9\-_]+\})/gi;
+  const out = String(text).replace(re, (m) => {
+    const tag = `[[TOK${i++}]]`;
+    placeholders.push({ tag, val: m });
+    return tag;
+  });
+  return { text: out, placeholders };
+}
+function restoreTokensText(text='', placeholders=[]){
+  let out = String(text);
+  for (const p of placeholders) out = out.replaceAll(p.tag, p.val);
+  return out;
+}
+
+// --- Cadence Polisher: small, safe, style-only changes (no facts/citations/tokens) ---
+function polishCadence(text='', seed=0){
+  const openers = ['Notably,', 'In practical terms,', 'Two points emerge:', 'Critically,', 'We observed that'];
+  const openerBad = /^(Additionally|Furthermore|Moreover|However|In conclusion|In essence|In summary|Overall)\b[:,]?/i;
+
+  // Cliché replacements map (very conservative)
+  const reps = [
+    { re:/\bIn recent years\b/gi, to:'Recently' },
+    { re:/\bIt is worth noting that\b/gi, to:'Notably,' },
+    { re:/\bIt should be noted that\b/gi, to:'Importantly,' },
+    { re:/\bTable\s+(\d+)\s+illustrates\b/gi, to:'Table $1 shows' },
+    { re:/\bFigure\s+(\d+)\s+illustrates\b/gi, to:'Figure $1 shows' },
+  ];
+
+  const paras = String(text).split(/\n{2,}/);
+  const polished = paras.map((p, idx) => {
+    let s = p;
+
+    // Replace generic paragraph openers once per paragraph (if present)
+    s = s.replace(/^(\s*)[A-Z][a-z]+.*?/, (line) => {
+      // If the very start matches a generic opener, swap it
+      if (openerBad.test(line.trimStart())) {
+        const pick = openers[(seed + idx) % openers.length];
+        // replace only the opener token, preserve rest of line after comma/colon if any
+        return line.trimStart().replace(openerBad, pick);
+      }
+      return line;
+    });
+
+    // Cliché replacements
+    reps.forEach(({re,to}) => { s = s.replace(re, to); });
+
+    // Gentle punctuation variety: replace first ", which" with " — which" (once)
+    s = s.replace(/, which/, ' — which');
+
+    return s;
+  });
+
+  return polished.join('\n\n');
+}
+
 
 // Protect inline citations by replacing them with placeholders [[CIT0]], [[CIT1]], ...
 function protectCitationsText(text=''){
@@ -536,12 +610,12 @@ let ok = false;
 let reason = '';
 
 try{
-const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
-const { data } = await axios.post('/api/ai/humanize', {
-  text: `# ${sec.name}\n\n${prot.text}`,
-  level: humanizeLevel,
-  context: ctx
-});
+  const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
+  const { data } = await axios.post('/api/ai/humanize', {
+    text: `# ${sec.name}\n\n${prot.text}`,
+    level: humanizeLevel,
+    context: ctx
+  });
 
   const raw = (data && typeof data.text==='string')
     ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
@@ -568,8 +642,21 @@ if (!ok) {
       ok = true;
       reason = '';
     }
-  } catch {
-    // keep original & reason as-is
+  } catch { /* keep original & reason as-is */ }
+}
+
+// 3) Cadence Polisher (only when ok). Protect tokens & cites so counts stay identical.
+if (ok) {
+  const sigUsed = countsSignature(used);
+  const tokProt = protectTokensText(used);
+  const citProt2 = protectCitationsText(tokProt.text);
+  const polished = polishCadence(citProt2.text, i);          // i = loop index
+  const restored = restoreCitationsText(polished, citProt2.placeholders);
+  const withTokens = restoreTokensText(restored, tokProt.placeholders);
+
+  // sanity: if protected counts changed, keep unpolished
+  if (countsSignature(withTokens) === sigUsed) {
+    used = withTokens;
   }
 }
 
