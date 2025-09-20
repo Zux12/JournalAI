@@ -348,7 +348,9 @@ Rules:
 // ---- DOCX Export (markdown-ish headings) ----
 api.post('/export/docx', async (req, res) => {
   try {
-    const { content = '', filename = 'manuscript.docx', figMedia = {} } = req.body || {};
+
+    const { content = '', filename = 'manuscript.docx', figMedia = {}, tabData = {} } = req.body || {};
+
     if (!content || !content.trim()) {
       return res.status(400).json({ error: 'No content provided' });
     }
@@ -357,6 +359,8 @@ const {
   Document, Packer, Paragraph, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, ImageRun
 } = require('docx');
+
+
 
 
 function parseMarkdownTable(mdLines) {
@@ -375,6 +379,26 @@ function parseMarkdownTable(mdLines) {
   return { headers: header, body: dataRows };
 }
 
+
+function makeDocxTableFromDataset(ds){
+  const headers = Array.isArray(ds?.columns) ? ds.columns : [];
+  const body    = Array.isArray(ds?.rows)    ? ds.rows    : [];
+  const headerRow = headers.length
+    ? new TableRow({
+        children: headers.map(h => new TableCell({ children: [ new Paragraph(String(h)) ] }))
+      })
+    : null;
+  const bodyRows = body.map(r =>
+    new TableRow({
+      children: r.map(cell => new TableCell({ children: [ new Paragraph(String(cell ?? '')) ] }))
+    })
+  );
+  const rows = headerRow ? [headerRow, ...bodyRows] : bodyRows;
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
+}
+
+
+    
 function makeDocxTable({ headers, body }) {
   // Build header row (if present)
   const headerRow = headers.length
@@ -482,6 +506,27 @@ for (let i = 0; i < lines.length; i++) {
     continue;
   }
 
+
+    // Table token on its own line?  {tab:ID}
+  const tabTok = line.match(/^\s*\{tab:([a-z0-9\-_]+)\}\s*$/i);
+  if (tabTok) {
+    const id = tabTok[1];
+    const ds = tabData[id];
+    if (ds) {
+      const table = makeDocxTableFromDataset(ds);
+      children.push(table);
+      // Optional caption
+      if (ds.caption) {
+        children.push(new Paragraph({ text: ds.caption, alignment: AlignmentType.CENTER }));
+      }
+    } else {
+      // fallback: keep placeholder if we have no dataset
+      children.push(new Paragraph({ text: `[Table: ${id}]`, alignment: AlignmentType.CENTER }));
+    }
+    continue;
+  }
+
+
   
   // Headings H1/H2/H3
   if (line.startsWith('### ')) {
@@ -529,24 +574,7 @@ const doc = new Document({
 });
 
 
-api.post('/ai/humanize', async (req, res) => {
-  try {
-    const { text = '', degree = 'light' } = req.body || {};
-    const prompt = `Rewrite the following text to sound natural and varied (${degree} variation). Keep meaning and references intact.\n\n${text}`;
-    const content = await openaiChat(
-      [
-        { role: 'system', content: 'You subtly vary phrasing, rhythm, and syntax while preserving meaning.' },
-        { role: 'user', content: prompt }
-      ],
-      'gpt-4o-mini',
-      0.7
-    );
-    res.json({ text: content });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'AI humanize failed' });
-  }
-});
+
 
 
 api.post('/ai/generate-tables', async (req, res) => {
@@ -691,10 +719,27 @@ app.listen(PORT, () => console.log(`Server on :${PORT}`));
 // ---summarize ---
 api.post('/ai/humanize', async (req, res) => {
   try {
+    // --- strip chatty scaffolding from AI replies ---
+    function sanitizeChattyScaffolding(s=''){
+      let out = String(s);
+
+      // Drop obviously chatty lines
+      const badLine = /^(Of course|Sure|Certainly|I can|I'd be happy to|Please provide|As an AI|Here is|Let me|Great!|Thanks for|No problem)/i;
+      out = out.split(/\r?\n/).filter(line => !badLine.test(line.trim())).join('\n');
+
+      // Remove "Here's …:" without any content after it
+      out = out.replace(/Here(?:’|')s[^:]*:\s*$/i, '');
+
+      // Trim extra spaces
+      out = out.replace(/\s{2,}/g, ' ').trim();
+      return out;
+    }
+
     const {
       text = '',
       degree = 'light',        // backward-compat: 'light' | 'medium'
-      level = null             // new: 'proofread' | 'light' | 'medium' | 'heavy' | 'extreme' | 'ultra'
+      level = null,            // 'proofread' | 'light' | 'medium' | 'heavy' | 'extreme' | 'ultra'
+      context = ''             // optional grounding context from client
     } = req.body || {};
 
     if (!text || text.trim().length < 20) {
@@ -703,7 +748,7 @@ api.post('/ai/humanize', async (req, res) => {
 
     const mode = String(level || degree || 'light').toLowerCase();
 
-    // Map levels to concise instructions (kept short for minimal token use)
+    // Map levels to concise instructions
     const modeRules = {
       'proofread':
         'Proofread only. Fix grammar, punctuation, minor clarity. NO paraphrasing. Keep sentence order and boundaries. ' +
@@ -724,20 +769,24 @@ api.post('/ai/humanize', async (req, res) => {
         'Maximum fluency per paragraph. Compress redundancies and polish style. Keep paragraph boundaries. ' +
         'Absolutely preserve numbers/units, citations, and tokens {fig:..}/{tab:..}.'
     };
-
     const rules = modeRules[mode] || modeRules['light'];
 
+    // NEW: define ctx and systemMsg (were missing)
+    const ctx = String(context || '').slice(0, 6000);
 
-    
+    const systemMsg =
+      'You are a precise academic editor. Your output must preserve meaning, factual content, all numbers/units, ' +
+      'citations (e.g., [1] or (Author, 2020)), and tokens like {fig:ID}/{tab:ID}. Do not invent facts or citations. ' +
+      'Prefer wording that stays grounded in the evidence snippets when provided.';
 
-const cadenceHints = ctx ? (
-  'Natural cadence:\n' +
-  '- Vary sentence lengths (include some short ≤12-word sentences and a few long >35-word sentences per section).\n' +
-  '- Rotate paragraph openers (e.g., “Notably,” “In practical terms,” “We observed,” “Two points emerge…”).\n' +
-  '- Allow sparse em-dashes/parentheticals (≤1 per paragraph). Avoid boilerplate openers (e.g., “In recent years,” “It is worth noting”).\n'
-) : '';
+    const cadenceHints = ctx ? (
+      'Natural cadence:\n' +
+      '- Vary sentence lengths (include some short ≤12-word sentences and a few long >35-word sentences per section).\n' +
+      '- Rotate paragraph openers (e.g., “Notably,” “In practical terms,” “We observed,” “Two observations follow.”).\n' +
+      '- Allow sparse em-dashes/parentheticals (≤1 per paragraph). Avoid boilerplate openers (e.g., “In recent years,” “It is worth noting”).\n'
+    ) : '';
 
-const userMsg =
+    const userMsg =
 `Edit the following section according to these rules:
 ${rules}
 ${cadenceHints}
@@ -748,22 +797,19 @@ ${ctx}
 ` : ''}TEXT:
 ${text.slice(0, 12000)}`;
 
-
-
-
-    
-
-
-    const out = await openaiChat(
+    let out = await openaiChat(
       [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }],
       'gpt-4o-mini',
       mode === 'proofread' ? 0.1 : mode === 'light' ? 0.3 : mode === 'medium' ? 0.5 : 0.6
     );
 
-    res.json({ text: (out || '').trim() });
+    // sanitize chatty scaffolding before returning to client
+    out = sanitizeChattyScaffolding(out || '');
+    return res.json({ text: out });
   } catch (e) {
     console.error('AI humanize error:', e?.message || e);
     res.status(500).json({ error: e?.message || 'AI humanize failed' });
   }
 });
+
 
