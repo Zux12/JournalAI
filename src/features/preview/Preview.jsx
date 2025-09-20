@@ -984,6 +984,19 @@ function buildGroundingContextForSection(sectionName){
     </select>
   </div>
 
+  <div style={{alignSelf:'end', fontSize:12, color:'#667'}}>
+    <a href="#" onClick={e=>{e.preventDefault(); alert(
+      'Humanize levels:\n' +
+      '• Proofread: grammar/punctuation only, no paraphrase.\n' +
+      '• Light: small paraphrases, better flow.\n' +
+      '• Medium: moderate paraphrase, keep structure.\n' +
+      '• Heavy: sentence-level rewrite, same paragraph.\n' +
+      '• Extreme: strong per-paragraph rewrite.\n' +
+      '• Ultra: max fluency per paragraph, tokens/numbers intact.'
+    );}}>ℹ️ What these mean</a>
+  </div> 
+
+  
 <div style={{display:'flex', gap:12, alignItems:'center', marginTop:6, flexWrap:'wrap'}}>
   <label>
     <input
@@ -1022,17 +1035,11 @@ function buildGroundingContextForSection(sectionName){
       </select>
     </div>
   )}
-  <div style={{alignSelf:'end', fontSize:12, color:'#667'}}>
-    <a href="#" onClick={e=>{e.preventDefault(); alert(
-      'Humanize levels:\n' +
-      '• Proofread: grammar/punctuation only, no paraphrase.\n' +
-      '• Light: small paraphrases, better flow.\n' +
-      '• Medium: moderate paraphrase, keep structure.\n' +
-      '• Heavy: sentence-level rewrite, same paragraph.\n' +
-      '• Extreme: strong per-paragraph rewrite.\n' +
-      '• Ultra: max fluency per paragraph, tokens/numbers intact.'
-    );}}>ℹ️ What these mean</a>
-  </div>
+
+  
+
+
+  
 </div>
 
 
