@@ -461,8 +461,18 @@ function imageParasForToken(tokenId){
     
     // Simple markdown-ish parse: "# " → H1, "## " → H2, otherwise normal para
 // Parse text into DOCX elements (H1/H2/H3, paragraphs, and real tables from [[AI-TABLEMD ...]] blocks)
-const lines = String(content).split(/\r?\n/);
+// Normalize markers/tokens to their own lines, even if they appear inline
+const normalized = String(content)
+  // table markdown block markers
+  .replace(/\s*\[\[AI-TABLEMD START [^\]]+\]\]\s*/g, '\n$&\n')
+  .replace(/\s*\[\[AI-TABLEMD END [^\]]+\]\]\s*/g, '\n$&\n')
+  // tokens
+  .replace(/\s*\{fig:[^}]+\}\s*/gi, '\n$&\n')
+  .replace(/\s*\{tab:[^}]+\}\s*/gi, '\n$&\n');
+
+const lines = normalized.split(/\r?\n/);
 const children = [];
+
 
 for (let i = 0; i < lines.length; i++) {
   let raw = lines[i];
@@ -559,8 +569,52 @@ for (let i = 0; i < lines.length; i++) {
 }
 
 const doc = new Document({
+  styles: {
+    default: {
+      document: {
+        run: {
+          font: 'Times New Roman',
+          size: 24,         // half-points = 12 pt
+          color: '000000'
+        },
+        paragraph: {
+          spacing: { line: 360 } // 1.5 lines (240 = single)
+        }
+      }
+    },
+    paragraphStyles: [
+      {
+        id: 'Heading1',
+        name: 'Heading 1',
+        basedOn: 'Normal',
+        next: 'Normal',
+        quickFormat: true,
+        run: { font: 'Times New Roman', size: 28, bold: true, color: '000000' }, // 14 pt
+        paragraph: { spacing: { after: 120 } }
+      },
+      {
+        id: 'Heading2',
+        name: 'Heading 2',
+        basedOn: 'Normal',
+        next: 'Normal',
+        quickFormat: true,
+        run: { font: 'Times New Roman', size: 26, bold: true, color: '000000' }, // 13 pt
+        paragraph: { spacing: { before: 120, after: 60 } }
+      },
+      {
+        id: 'Heading3',
+        name: 'Heading 3',
+        basedOn: 'Normal',
+        next: 'Normal',
+        quickFormat: true,
+        run: { font: 'Times New Roman', size: 24, bold: true, color: '000000' }, // 12 pt
+        paragraph: { spacing: { before: 90, after: 45 } }
+      }
+    ]
+  },
   sections: [{ properties: {}, children }]
 });
+
 
 
     const buffer = await Packer.toBuffer(doc);
