@@ -727,16 +727,23 @@ api.post('/ai/humanize', async (req, res) => {
 
     const rules = modeRules[mode] || modeRules['light'];
 
-    const systemMsg =
-      'You are a precise academic editor. Your output must preserve meaning, factual content, all numbers/units, ' +
-      'citations (e.g., [1] or (Author, 2020)), and tokens like {fig:ID}/{tab:ID}. Do not invent facts or citations.';
+const ctx = String(req.body.context || '').slice(0, 6000);
 
-    const userMsg =
+const systemMsg =
+  'You are a precise academic editor. Your output must preserve meaning, factual content, all numbers/units, ' +
+  'citations (e.g., [1] or (Author, 2020)), and tokens like {fig:ID}/{tab:ID}. Do not invent facts or citations. ' +
+  'Prefer wording that stays grounded in the evidence snippets when provided.';
+
+const userMsg =
 `Edit the following section according to these rules:
 ${rules}
 
-TEXT:
-${text.slice(0, 12000)}  `;
+${ctx ? `EVIDENCE SNIPPETS (for context; do not quote verbatim unless necessary):
+${ctx}
+
+` : ''}TEXT:
+${text.slice(0, 12000)}`;
+
 
     const out = await openaiChat(
       [{ role: 'system', content: systemMsg }, { role: 'user', content: userMsg }],
