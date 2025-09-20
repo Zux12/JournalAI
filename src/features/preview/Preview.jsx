@@ -80,6 +80,22 @@ function buildFigMedia(){
   return map;
 }
 
+function buildTabData(){
+  const map = {};
+  (project.tables || []).forEach(t => {
+    // Keep what we have in the library: columns + sampleRows + caption
+    if (Array.isArray(t.columns) && t.columns.length && Array.isArray(t.sampleRows)) {
+      map[t.id] = {
+        columns: t.columns,
+        rows: t.sampleRows,
+        caption: t.caption || ''
+      };
+    }
+  });
+  return map;
+}
+
+  
   // ---------- Front matter ----------
   function buildFrontMatter(){
     const md = project.metadata || {};
@@ -733,7 +749,7 @@ function restoreCitationsText(text='', placeholders=[]){
       const text = await buildManuscriptText(true); // keep {fig:ID} tokens for the server to embed images
 const { data } = await axios.post(
   '/api/export/docx',
-  { content: text, filename: 'manuscript.docx', figMedia: buildFigMedia() },
+  { content: text, filename: 'manuscript.docx', figMedia: buildFigMedia(), tabData: buildTabData() },
   { responseType: 'arraybuffer' }
 );
       const blob = new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
@@ -872,7 +888,7 @@ setHmDetails(prev => prev.map(d =>
     setHmStage('Generating');
     const { data } = await axios.post(
       '/api/export/docx',
-      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx`, figMedia: buildFigMedia() },
+      { content: finalText, filename: `manuscript_humanized_${humanizeLevel}.docx`, figMedia: buildFigMedia(), tabData: buildTabData() },
       { responseType: 'arraybuffer' }
     );
 
