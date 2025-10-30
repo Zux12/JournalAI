@@ -418,6 +418,14 @@ if (ok) {
   }
 }
 
+// Ensure Abstract keywords survive humanization
+if (/^abstract$/i.test(sec.name)
+    && Array.isArray(project.metadata?.keywords)
+    && project.metadata.keywords.length) {
+  if (!/^\s*Keywords:/mi.test(used)) {
+    used = `${used}\n\nKeywords: ${project.metadata.keywords.join('; ')}`;
+  }
+}
 
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
@@ -860,6 +868,14 @@ if (ok) {
   }
 }
 
+// Ensure Abstract keywords survive humanization
+if (/^abstract$/i.test(sec.name)
+    && Array.isArray(project.metadata?.keywords)
+    && project.metadata.keywords.length) {
+  if (!/^\s*Keywords:/mi.test(used)) {
+    used = `${used}\n\nKeywords: ${project.metadata.keywords.join('; ')}`;
+  }
+}
 
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
