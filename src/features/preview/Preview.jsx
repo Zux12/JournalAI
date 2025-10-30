@@ -169,12 +169,24 @@ function buildTabData(){
   }
 
 
-// Remove AI block markers from text (so exports stay clean).
-function stripAiWriteupMarkers(text=''){
-  return String(text)
-    .replace(/\[\[AI-WRITEUP START (fig|tab):[^\]]+\]\]\s*/g, '')
-    .replace(/\s*\[\[AI-WRITEUP END (fig|tab):[^\]]+\]\]/g, '');
+// Remove AI block markers from text.
+// Options: { tableMd: true } also strips [[AI-TABLEMD ...]] blocks (used only for DOCX to avoid duplicates)
+function stripAiBlocks(text = '', opts = {}) {
+  let out = String(text);
+
+  // Always strip AI-WRITEUP blocks
+  out = out
+    .replace(/\[\[AI-WRITEUP START (fig|tab):[^\]]+\]\][\s\S]*?\[\[AI-WRITEUP END (fig|tab):[^\]]+\]\]/g, '');
+
+  if (opts.tableMd) {
+    // Strip AI-TABLEMD blocks when exporting to DOCX (tokens will render tables)
+    out = out
+      .replace(/\[\[AI-TABLEMD START (fig|tab):[^\]]+\]\][\s\S]*?\[\[AI-TABLEMD END (fig|tab):[^\]]+\]\]/g, '');
+  }
+
+  return out;
 }
+
 
   
   // ---------- Build sections + refs ----------
@@ -201,9 +213,14 @@ function stripAiWriteupMarkers(text=''){
 if (!forDocx) {
   // In Preview/TXT we render "Figure N"/"Table M"
   txt = applyFigTabTokens(txt, figMap, tabMap);
+  // Strip write-ups only; keep AI-TABLEMD so users can see markdown tables in TXT/Preview if present
+  txt = stripAiBlocks(txt, { tableMd: false });
+} else {
+  // For DOCX: keep {fig:}/{tab:} tokens (server will render them),
+  // and strip BOTH write-ups and AI-TABLEMD blocks to avoid duplicate tables.
+  txt = stripAiBlocks(txt, { tableMd: true });
 }
-// Always hide write-up markers from what the user sees/exports
-txt = stripAiWriteupMarkers(txt);
+
 
 
       pieces.push({ title: s.name, text: txt });
