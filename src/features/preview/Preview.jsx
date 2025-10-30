@@ -190,18 +190,34 @@ function stripAiBlocks(text = '', opts = {}) {
 
 function escapeRx(s=''){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Remove a leading line that repeats the section name (e.g., "Abstract", "Methods:", "# Methods")
-function stripDuplicateSectionHeading(text='', sectionName=''){
+// Remove a duplicate section heading if the humanizer echoed it.
+// Handles: "# Abstract\n", "Abstract:\n", "Abstract " (inline prefix), extra blank lines.
+function stripDuplicateSectionHeading(text = '', sectionName = '') {
+  let s = String(text || '');
   const name = escapeRx(sectionName || '');
-  if (!name) return text;
+  if (!name) return s;
 
-  // Matches optional leading '#' header OR a bare label line like "Abstract" / "Abstract:" followed by a blank/newline
-  const re = new RegExp(
+  // 0) Trim leading blank lines
+  s = s.replace(/^\s*\n+/, '');
+
+  // 1) Remove a full leading heading line: "# Abstract" / "Abstract" / "Abstract:"
+  const reHeadingLine = new RegExp(
     `^\\s*(?:#\\s*)?${name}\\s*:?\\s*\\n+`,
     'i'
   );
-  return String(text).replace(re, '');
+  s = s.replace(reHeadingLine, '');
+
+  // 2) Remove an inline echoed label at the very start of the first paragraph:
+  //    "Abstract: ..." or "Abstract ..."  → strip the "Abstract" part
+  const reInlinePrefixWithColon = new RegExp(`^${name}\\s*:\\s*`, 'i');
+  const reInlinePrefixSpace     = new RegExp(`^${name}\\s+`, 'i');
+
+  s = s.replace(reInlinePrefixWithColon, '');
+  s = s.replace(reInlinePrefixSpace, '');
+
+  return s;
 }
+
 
 
   
