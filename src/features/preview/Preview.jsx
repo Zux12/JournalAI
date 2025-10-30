@@ -188,6 +188,23 @@ function stripAiBlocks(text = '', opts = {}) {
 }
 
 
+function escapeRx(s=''){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// Remove a leading line that repeats the section name (e.g., "Abstract", "Methods:", "# Methods")
+function stripDuplicateSectionHeading(text='', sectionName=''){
+  const name = escapeRx(sectionName || '');
+  if (!name) return text;
+
+  // Matches optional leading '#' header OR a bare label line like "Abstract" / "Abstract:" followed by a blank/newline
+  const re = new RegExp(
+    `^\\s*(?:#\\s*)?${name}\\s*:?\\s*\\n+`,
+    'i'
+  );
+  return String(text).replace(re, '');
+}
+
+
+  
   
   // ---------- Build sections + refs ----------
  
@@ -444,6 +461,11 @@ if (/^abstract$/i.test(sec.name)
   }
 }
 
+
+// If the humanizer echoed the section label (e.g., "Abstract", "Methods:"), remove it
+used = stripDuplicateSectionHeading(used, sec.name);
+
+      
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
 setHmDetails(prev => prev.map(d =>
@@ -894,6 +916,9 @@ if (/^abstract$/i.test(sec.name)
   }
 }
 
+
+used = stripDuplicateSectionHeading(used, sec.name);
+      
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
 setHmDetails(prev => prev.map(d =>
