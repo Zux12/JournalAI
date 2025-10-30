@@ -190,48 +190,61 @@ function stripAiBlocks(text = '', opts = {}) {
 
 function escapeRx(s=''){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Remove echoed section label at the very start of the humanized text.
-// Handles lines like "# Abstract", "Abstract:", "Abstract —", and inline prefixes "Abstract The…", including weird spacing.
 function stripDuplicateSectionHeading(text = '', sectionName = '') {
   let s = String(text || '');
-  const name = escapeRx(sectionName || '');
-  if (!name) return s;
 
-  // Trim leading blanks first
-  s = s.replace(/^\uFEFF?[\s\r\n]+/, '');
+  // Trim BOM and leading whitespace/newlines
+  s = s.replace(/^\uFEFF/, '').replace(/^\s+/, '');
 
-  // 1) Drop a stand-alone heading line (Markdown or plain):
-  //    "# Abstract\n", "Abstract:\n", "Abstract —\n"
-  const reHeadingLine = new RegExp(
-    `^\\s*(?:#\\s*)?${name}\\s*(?:[:\\-–—]\\s*)?\\n+`,
-    'i'
-  );
-  s = s.replace(reHeadingLine, '');
+  // Build a synonyms set per common journal sections
+  const name = String(sectionName || '').toLowerCase();
+  const canon = {
+    abstract: ['abstract', 'summary', 'overview'],
+    introduction: ['introduction', 'background', 'overview'],
+    methods: ['methods', 'method', 'methodology', 'materials and methods', 'materials & methods', 'experimental', 'experiments'],
+    results: ['results', 'findings', 'outcomes'],
+    discussion: ['discussion', 'analysis', 'interpretation'],
+    'results and discussion': ['results and discussion', 'results & discussion', 'discussion and results'],
+    conclusion: ['conclusion', 'conclusions', 'concluding remarks', 'summary and conclusion', 'summary & conclusion'],
+    acknowledgements: ['acknowledgements', 'acknowledgments', 'acknowledgement', 'acknowledgment'],
+  };
 
-  // 2) Drop an inline echoed prefix at the very start of the first paragraph:
-  //    "Abstract: …", "Abstract — …", "Abstract …"
-  const reInlinePrefix = new RegExp(
-    `^${name}\\s*(?:[:\\-–—]\\s*|\\s+)`,
-    'i'
-  );
-  s = s.replace(reInlinePrefix, '');
+  const key = Object.keys(canon).find(k => k === name) || name;
+  const syns = new Set([name].concat(canon[key] || []));
+
+  // Build a regex that matches any synonym at the very start (case-insensitive),
+  // optionally preceded by Markdown hashes (H1–H6), and optionally followed by
+  // colon/dash/mdash/en-dash or whitespace.
+  // Examples matched: "# Abstract", "## Methods", "Abstract:", "Methods —", "Method "
+  const synAlt = Array.from(syns)
+    .filter(Boolean)
+    .sort((a,b)=>b.length-a.length) // longer first
+    .map(escapeRx)
+    .join('|');
+
+  if (synAlt) {
+    // 1) Drop a standalone first line that’s a heading (Markdown or plain)
+    const reHeadingLine = new RegExp(
+      `^(?:#{1,6}\\s*)?(?:${synAlt})\\s*(?:[:\\-–—]\\s*)?\\n+`,
+      'i'
+    );
+    s = s.replace(reHeadingLine, '');
+
+    // 2) Drop an echoed inline prefix at the very start of the first paragraph
+    // e.g., "Abstract: This study …", "Methods — We …", "Method We …"
+    const reInlinePrefix = new RegExp(
+      `^(?:${synAlt})\\s*(?:[:\\-–—]\\s*|\\s+)`,
+      'i'
+    );
+    s = s.replace(reInlinePrefix, '');
+  }
+
+  // Final tidy: collapse excessive leading blank lines once more
+  s = s.replace(/^\s*\n+/, '');
 
   return s;
 }
 
-// Keep only a single "Keywords:" line (first occurrence wins)
-function dedupeKeywordsLines(text='') {
-  const lines = String(text || '').split(/\r?\n/);
-  let seen = false;
-  const out = lines.filter((ln) => {
-    if (/^\s*Keywords\s*:/i.test(ln)) {
-      if (seen) return false;
-      seen = true;
-    }
-    return true;
-  });
-  return out.join('\n');
-}
 
 
 
@@ -419,6 +432,11 @@ const sigBefore = countsSignature(original);
 // protect cites, then send to AI
 // 1) Fast path: placeholder method
 const prot = protectCitationsText(original);
+const protClean = {
+  text: stripDuplicateSectionHeading(prot.text, sec.name),
+  placeholders: prot.placeholders
+};
+
 let used = original;
 let ok = false;
 let reason = '';
@@ -426,7 +444,7 @@ let reason = '';
 try{
   const ctx = groundedMode ? buildGroundingContextForSection(sec.name) : '';
   const { data } = await axios.post('/api/ai/humanize', {
-    text: `# ${sec.name}\n\n${prot.text}`,
+    text: `# ${sec.name}\n\n${protClean.text}`,
     level: humanizeLevel,
     context: ctx
   });
