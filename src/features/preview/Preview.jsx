@@ -190,33 +190,49 @@ function stripAiBlocks(text = '', opts = {}) {
 
 function escapeRx(s=''){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// Remove a duplicate section heading if the humanizer echoed it.
-// Handles: "# Abstract\n", "Abstract:\n", "Abstract " (inline prefix), extra blank lines.
+// Remove echoed section label at the very start of the humanized text.
+// Handles lines like "# Abstract", "Abstract:", "Abstract —", and inline prefixes "Abstract The…", including weird spacing.
 function stripDuplicateSectionHeading(text = '', sectionName = '') {
   let s = String(text || '');
   const name = escapeRx(sectionName || '');
   if (!name) return s;
 
-  // 0) Trim leading blank lines
-  s = s.replace(/^\s*\n+/, '');
+  // Trim leading blanks first
+  s = s.replace(/^\uFEFF?[\s\r\n]+/, '');
 
-  // 1) Remove a full leading heading line: "# Abstract" / "Abstract" / "Abstract:"
+  // 1) Drop a stand-alone heading line (Markdown or plain):
+  //    "# Abstract\n", "Abstract:\n", "Abstract —\n"
   const reHeadingLine = new RegExp(
-    `^\\s*(?:#\\s*)?${name}\\s*:?\\s*\\n+`,
+    `^\\s*(?:#\\s*)?${name}\\s*(?:[:\\-–—]\\s*)?\\n+`,
     'i'
   );
   s = s.replace(reHeadingLine, '');
 
-  // 2) Remove an inline echoed label at the very start of the first paragraph:
-  //    "Abstract: ..." or "Abstract ..."  → strip the "Abstract" part
-  const reInlinePrefixWithColon = new RegExp(`^${name}\\s*:\\s*`, 'i');
-  const reInlinePrefixSpace     = new RegExp(`^${name}\\s+`, 'i');
-
-  s = s.replace(reInlinePrefixWithColon, '');
-  s = s.replace(reInlinePrefixSpace, '');
+  // 2) Drop an inline echoed prefix at the very start of the first paragraph:
+  //    "Abstract: …", "Abstract — …", "Abstract …"
+  const reInlinePrefix = new RegExp(
+    `^${name}\\s*(?:[:\\-–—]\\s*|\\s+)`,
+    'i'
+  );
+  s = s.replace(reInlinePrefix, '');
 
   return s;
 }
+
+// Keep only a single "Keywords:" line (first occurrence wins)
+function dedupeKeywordsLines(text='') {
+  const lines = String(text || '').split(/\r?\n/);
+  let seen = false;
+  const out = lines.filter((ln) => {
+    if (/^\s*Keywords\s*:/i.test(ln)) {
+      if (seen) return false;
+      seen = true;
+    }
+    return true;
+  });
+  return out.join('\n');
+}
+
 
 
 
@@ -478,12 +494,22 @@ if (/^abstract$/i.test(sec.name)
 }
 
 
-// If the humanizer echoed the section label (e.g., "Abstract", "Methods:"), remove it
-used = stripDuplicateSectionHeading(used, sec.name);
+// Ensure Abstract keywords survive humanization (keep your existing guard)
+if (/^abstract$/i.test(sec.name)
+    && Array.isArray(project.metadata?.keywords)
+    && project.metadata.keywords.length) {
+  if (!/^\s*Keywords:/mi.test(used)) {
+    used = `${used}\n\nKeywords: ${project.metadata.keywords.join('; ')}`;
+  }
+}
 
-      
+// Strip any echoed section label (standalone or inline), then de-dupe Keywords lines
+used = stripDuplicateSectionHeading(used, sec.name);
+used = dedupeKeywordsLines(used);
+
 // Finalize
 out.push(`# ${sec.name}\n\n${used}`);
+
 setHmDetails(prev => prev.map(d =>
   d.id === sec.name
     ? { ...d, status: ok ? 'done' : 'fallback', reason: ok ? '' : reason }
