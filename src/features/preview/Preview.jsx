@@ -193,57 +193,47 @@ function escapeRx(s=''){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 function stripDuplicateSectionHeading(text = '', sectionName = '') {
   let s = String(text || '');
 
-  // Trim BOM and leading whitespace/newlines
+  // Trim BOM & leading blank lines
   s = s.replace(/^\uFEFF/, '').replace(/^\s+/, '');
 
-  // Build a synonyms set per common journal sections
-  const name = String(sectionName || '').toLowerCase();
+  const name = String(sectionName || '').trim().toLowerCase();
+  if (!name) return s;
+
+  // Common variants per section (covers singular/plural & typical synonyms)
   const canon = {
-    abstract: ['abstract', 'summary', 'overview'],
-    introduction: ['introduction', 'background', 'overview'],
-    methods: ['methods', 'method', 'methodology', 'materials and methods', 'materials & methods', 'experimental', 'experiments'],
-    results: ['results', 'findings', 'outcomes'],
-    discussion: ['discussion', 'analysis', 'interpretation'],
-    'results and discussion': ['results and discussion', 'results & discussion', 'discussion and results'],
-    conclusion: ['conclusion', 'conclusions', 'concluding remarks', 'summary and conclusion', 'summary & conclusion'],
-    acknowledgements: ['acknowledgements', 'acknowledgments', 'acknowledgement', 'acknowledgment'],
+    abstract: ['abstract','summary','overview'],
+    introduction: ['introduction','background','overview'],
+    methods: ['methods','method','methodology','materials and methods','materials & methods','experimental'],
+    results: ['results','findings','outcomes'],
+    discussion: ['discussion','analysis','interpretation'],
+    'results and discussion': ['results and discussion','results & discussion','discussion and results'],
+    conclusion: ['conclusion','conclusions','concluding remarks','summary and conclusion','summary & conclusion'],
+    acknowledgements: ['acknowledgements','acknowledgments','acknowledgement','acknowledgment'],
   };
 
-  const key = Object.keys(canon).find(k => k === name) || name;
-  const syns = new Set([name].concat(canon[key] || []));
-
-  // Build a regex that matches any synonym at the very start (case-insensitive),
-  // optionally preceded by Markdown hashes (H1–H6), and optionally followed by
-  // colon/dash/mdash/en-dash or whitespace.
-  // Examples matched: "# Abstract", "## Methods", "Abstract:", "Methods —", "Method "
-  const synAlt = Array.from(syns)
-    .filter(Boolean)
-    .sort((a,b)=>b.length-a.length) // longer first
-    .map(escapeRx)
-    .join('|');
+  const key = Object.keys(canon).includes(name) ? name : sectionName.toLowerCase();
+  const syns = new Set([name, ...(canon[key] || [])].filter(Boolean));
+  const synAlt = Array.from(syns).sort((a,b)=>b.length-a.length).map(escapeRx).join('|');
 
   if (synAlt) {
-    // 1) Drop a standalone first line that’s a heading (Markdown or plain)
-    const reHeadingLine = new RegExp(
-      `^(?:#{1,6}\\s*)?(?:${synAlt})\\s*(?:[:\\-–—]\\s*)?\\n+`,
-      'i'
+    // Remove a full heading line like "# Methods", "## Introduction", "Methods:", "Methods —"
+    s = s.replace(
+      new RegExp(`^(?:#{1,6}\\s*)?(?:${synAlt})\\s*(?:[:\\-–—]\\s*)?[\\r\\n]+`, 'i'),
+      ''
     );
-    s = s.replace(reHeadingLine, '');
 
-    // 2) Drop an echoed inline prefix at the very start of the first paragraph
-    // e.g., "Abstract: This study …", "Methods — We …", "Method We …"
-    const reInlinePrefix = new RegExp(
-      `^(?:${synAlt})\\s*(?:[:\\-–—]\\s*|\\s+)`,
-      'i'
+    // Remove an inline echoed prefix at the very start: "Methods: We …", "Method — We …", "Methods We …"
+    s = s.replace(
+      new RegExp(`^(?:${synAlt})\\s*(?:[:\\-–—]\\s*|\\s+)`, 'i'),
+      ''
     );
-    s = s.replace(reInlinePrefix, '');
   }
 
-  // Final tidy: collapse excessive leading blank lines once more
-  s = s.replace(/^\s*\n+/, '');
-
+  // Final tidy of leading blank lines
+  s = s.replace(/^[\\t \\f\\v]*[\\r\\n]+/, '');
   return s;
 }
+
 
 
 
@@ -449,9 +439,11 @@ try{
     context: ctx
   });
 
-  const raw = (data && typeof data.text==='string')
-    ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
-    : original;
+const raw = (data && typeof data.text==='string')
+  // remove ANY markdown heading H1..H6 at the very top
+  ? data.text.replace(/^#{1,6}[ \t]*[^\r\n]+[\r\n]+/, '')
+  : original;
+
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
@@ -914,9 +906,11 @@ try{
     context: ctx
   });
 
-  const raw = (data && typeof data.text==='string')
-    ? data.text.replace(/^#\s*[^ \n]+\s*\n+/, '')
-    : original;
+const raw = (data && typeof data.text==='string')
+  // remove ANY markdown heading H1..H6 at the very top
+  ? data.text.replace(/^#{1,6}[ \t]*[^\r\n]+[\r\n]+/, '')
+  : original;
+
   const humanized = restoreCitationsText(raw, prot.placeholders);
 
   const sigAfter = countsSignature(humanized);
